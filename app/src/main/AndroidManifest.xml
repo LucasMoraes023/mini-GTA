@@ -19,7 +19,7 @@
         </activity>
 
         <service
-            android:name=".CaptureService"
+            android:name=".CaptureServiceFixed"
             android:foregroundServiceType="mediaProjection"
             android:exported="false" />
 
