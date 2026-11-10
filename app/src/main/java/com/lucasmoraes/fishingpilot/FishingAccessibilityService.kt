@@ -114,11 +114,12 @@ class FishingAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun startCalibration() {
+    fun startCalibration() {
         removeMenu()
         removeCalibration()
 
-        val marker = TextView(this).apply {
+        lateinit var marker: TextView
+        marker = TextView(this).apply {
             text = "+"
             textSize = 38f
             gravity = Gravity.CENTER
