@@ -423,7 +423,55 @@ class CaptureService : Service() {
                 )
             }
         }
-        return best
+        if (best != null) return best
+
+        // Fallback: some game versions render the fishing panel translucent
+        // or with a textured background, so a dark connected component may
+        // not exist. The green target is a much more reliable anchor.
+        // Find its vertical position on the captured screen and create a
+        // broad horizontal ROI around it. The next stages still require a
+        // compact green target and a moving white marker before ALT can fire.
+        var greenCount = 0
+        var greenMinX = w
+        var greenMaxX = -1
+        var greenMinY = h
+        var greenMaxY = -1
+
+        var y = 0
+        while (y < h) {
+            var x = 0
+            while (x < w) {
+                val o = y * row + x * px
+                if (o + 2 < data.size) {
+                    val r = data[o].toInt() and 255
+                    val g = data[o + 1].toInt() and 255
+                    val b = data[o + 2].toInt() and 255
+                    if (g >= 110 && g > r * 1.30f && g > b * 1.12f && g - r >= 30) {
+                        greenCount++
+                        greenMinX = minOf(greenMinX, x)
+                        greenMaxX = maxOf(greenMaxX, x)
+                        greenMinY = minOf(greenMinY, y)
+                        greenMaxY = maxOf(greenMaxY, y)
+                    }
+                }
+                x += 3
+            }
+            y += 3
+        }
+
+        // A tiny green speck is likely unrelated UI noise. Require a cluster.
+        if (greenCount < 3 || greenMaxX < greenMinX || greenMaxY < greenMinY) {
+            return null
+        }
+
+        val anchorY = (greenMinY + greenMaxY) / 2
+        val roiHalfHeight = maxOf(24, h / 14)
+        return RectF2(
+            left = (w * 0.03f).toInt(),
+            top = (anchorY - roiHalfHeight).coerceAtLeast(0),
+            right = (w * 0.97f).toInt().coerceAtMost(w - 1),
+            bottom = (anchorY + roiHalfHeight).coerceAtMost(h - 1)
+        )
     }
 
     private fun findWhiteProgressBar(
