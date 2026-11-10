@@ -1,1 +1,4 @@
-<resources><string name="app_name">Fishing Pilot</string></resources>
+<resources>
+    <string name="app_name">Fishing Pilot</string>
+    <string name="accessibility_description">Permite ao Fishing Pilot tocar no botão ALT configurado quando o alvo da pesca estiver alinhado.</string>
+</resources>
