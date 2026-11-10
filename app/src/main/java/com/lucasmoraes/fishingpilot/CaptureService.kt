@@ -10,6 +10,8 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
 import android.content.pm.ServiceInfo
+import android.content.pm.PackageManager
+import rikka.shizuku.Shizuku
 
 class CaptureService : Service() {
     private var projection: MediaProjection? = null
@@ -72,10 +74,23 @@ class CaptureService : Service() {
     }
 
     private fun triggerAlt() {
+        if (tryShizukuAlt()) return
         val p=getSharedPreferences("pilot",MODE_PRIVATE)
         val x=p.getFloat("alt_x",-1f);val y=p.getFloat("alt_y",-1f)
         if(x>=0f&&y>=0f&&FishingAccessibilityService.tap(x,y)) return
         try { Runtime.getRuntime().exec(arrayOf("sh","-c","input keyevent 57")) } catch(_:Throwable){}
+    }
+
+    private fun tryShizukuAlt(): Boolean {
+        return try {
+            if (!Shizuku.pingBinder()) return false
+            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return false
+            val p = Shizuku.newProcess(arrayOf("input", "keyevent", "57"), null, null)
+            p.destroy()
+            true
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     private fun createChannel(){if(Build.VERSION.SDK_INT>=26){val nm=getSystemService(NOTIFICATION_SERVICE) as NotificationManager;nm.createNotificationChannel(NotificationChannel("capture","Fishing Pilot",NotificationManager.IMPORTANCE_LOW))}}
