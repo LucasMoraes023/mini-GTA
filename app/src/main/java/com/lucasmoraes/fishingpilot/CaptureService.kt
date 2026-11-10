@@ -136,6 +136,9 @@ class CaptureService : Service() {
             val data = ByteArray(b.remaining())
             b.get(data)
             framesReceived++
+            if (framesReceived % 10L == 0L) {
+                FishingAccessibilityService.updateStatus("CAPTURA OK • frames=$framesReceived • estado=$state")
+            }
 
             // IMPORTANT: We do not search the whole screen for green anymore.
             // First locate the black fishing dialog. Only then do we inspect
@@ -143,6 +146,9 @@ class CaptureService : Service() {
             val box = findFishingBox(data, w, h, px, row)
 
             if (box == null) {
+                if (framesReceived % 10L == 0L) {
+                    FishingAccessibilityService.updateStatus("CAPTURA OK • frames=$framesReceived • procurando alvo verde")
+                }
                 resetRoundAfterMissing()
                 previousFrame = data.copyOf()
                 previousFrameWidth = w
@@ -163,6 +169,9 @@ class CaptureService : Service() {
             val bar = findWhiteProgressBar(data, w, h, px, row, box)
 
             if (bar == null) {
+                if (framesReceived % 10L == 0L) {
+                    FishingAccessibilityService.updateStatus("CAPTURA OK • caixa detectada • procurando barra")
+                }
                 previousFrame = data.copyOf()
                 previousFrameWidth = w
                 previousFrameHeight = h
@@ -179,6 +188,9 @@ class CaptureService : Service() {
             val target = findGreenTargetInBar(data, px, row, bar)
 
             if (target == null) {
+                if (framesReceived % 10L == 0L) {
+                    FishingAccessibilityService.updateStatus("CAPTURA OK • barra detectada • procurando alvo verde")
+                }
                 previousFrame = data.copyOf()
                 previousFrameWidth = w
                 previousFrameHeight = h
@@ -214,6 +226,9 @@ class CaptureService : Service() {
             )
 
             if (whiteCenter == null || activeFrames < 3) {
+                if (framesReceived % 10L == 0L) {
+                    FishingAccessibilityService.updateStatus("CAPTURA OK • ALVO VERDE DETECTADO • seguindo marcador branco")
+                }
                 previousFrame = data.copyOf()
                 previousFrameWidth = w
                 previousFrameHeight = h
@@ -274,6 +289,7 @@ class CaptureService : Service() {
                 if (now - lastTrigger >= 500L) {
                     triggeredThisRound = true
                     lastTrigger = now
+                    FishingAccessibilityService.updateStatus("ALT DISPARADO • alvo verde alcançado")
                     triggerAlt()
                 }
             }
