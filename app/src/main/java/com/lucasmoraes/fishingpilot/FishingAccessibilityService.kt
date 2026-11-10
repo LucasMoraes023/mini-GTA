@@ -15,6 +15,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.os.Handler
 import android.os.Looper
+import android.os.Build
+import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import kotlin.math.roundToInt
 
@@ -42,13 +44,17 @@ class FishingAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        showFloatingButton()
+        if (Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this)) {
+            showFloatingButton()
+        } else {
+            mainHandler.post { showToast("Autorize sobrepor a outros apps para mostrar o botão FP") }
+        }
     }
 
     private fun overlayParams(width: Int, height: Int, gravity: Int): WindowManager.LayoutParams {
         return WindowManager.LayoutParams(
             width, height,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply { this.gravity = gravity }
