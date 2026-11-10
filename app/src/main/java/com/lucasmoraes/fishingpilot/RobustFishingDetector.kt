@@ -49,8 +49,8 @@ class RobustFishingDetector {
     private fun newRound(){ fired=false; lastEdge=Int.MIN_VALUE; lastT=0; speed=0f; moving=0 }
 
     private fun findBar(d:ByteArray,w:Int,h:Int,px:Int,row:Int):Bar?{
-        val ys0=(h*.75f).toInt(); val ys1=(h*.94f).toInt(); val minGreen=max(12,w/150)
-        for(y in ys0..ys1 step 2){
+        val ys0=0; val ys1=h-1; val minGreen=max(8,w/200)
+        for(y in ys0..ys1 step max(1,h/800)){
             var x=0
             while(x<w){
                 if(!green(d,w,h,px,row,x,y)){x+=2;continue}
@@ -61,7 +61,7 @@ class RobustFishingDetector {
                 var right=gr+1; gap=0
                 while(right<w){ if(barPixel(d,w,h,px,row,right,y)){gap=0}else{gap++;if(gap>3)break};right++ }
                 val l=left+1; val r=right-1
-                if(r-l+1<max(180,(w*.20f).toInt())) continue
+                if(r-l+1<max(100,(w*.18f).toInt())) continue
                 val half=max(12,h/24)
                 return Bar(l,r,max(0,y-half),min(h-1,y+half))
             }
