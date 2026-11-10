@@ -73,7 +73,7 @@ class MainActivity : Activity() {
         val stop = Button(this).apply {
             text = "PARAR"
             setOnClickListener {
-                stopService(Intent(this@MainActivity, CaptureService::class.java))
+                stopService(Intent(this@MainActivity, CaptureServiceFixed::class.java))
                 status.text = "Parado"
             }
         }
@@ -106,7 +106,7 @@ class MainActivity : Activity() {
         if (requestCode == this.requestCode && resultCode == RESULT_OK && data != null) {
             status.text = "Captura ativa • monitorando pesca"
             startForegroundService(
-                Intent(this, CaptureService::class.java)
+                Intent(this, CaptureServiceFixed::class.java)
                     .putExtra("resultCode", resultCode)
                     .putExtra("data", data)
             )
