@@ -16,6 +16,10 @@ class CaptureService : Service() {
     private var reader: ImageReader? = null
     private var lastTrigger = 0L
     private var processing = false
+    private var roundTriggered = false
+    private var targetCenter = Float.NaN
+    private var lastMarker = Float.NaN
+    private var targetMissingFrames = 0
 
     override fun onStartCommand(i: Intent?, flags: Int, startId: Int): Int {
         createChannel()
@@ -94,16 +98,50 @@ class CaptureService : Service() {
             val data = ByteArray(b.remaining())
             b.get(data)
 
-            val target = findGreenTarget(data, w, h, px, row) ?: return
-            val marker = findBrightMarker(data, w, h, px, row, target) ?: return
+            val target = findGreenTarget(data, w, h, px, row)
+            if (target == null) {
+                targetMissingFrames++
+                if (targetMissingFrames >= 3) {
+                    roundTriggered = false
+                    targetCenter = Float.NaN
+                    lastMarker = Float.NaN
+                }
+                return
+            }
 
-            if (marker >= target.left - 8f && marker <= target.right + 8f) {
+            targetMissingFrames = 0
+            val center = (target.left + target.right) / 2f
+
+            // A new green target means a new fishing round. Re-arm only when
+            // the target actually moves to a different position.
+            if (targetCenter.isNaN() || kotlin.math.abs(center - targetCenter) > 18f) {
+                targetCenter = center
+                roundTriggered = false
+                lastMarker = Float.NaN
+            }
+
+            val marker = findBrightMarker(data, w, h, px, row, target) ?: run {
+                lastMarker = Float.NaN
+                return
+            }
+
+            val inside = marker >= target.left - 5f && marker <= target.right + 5f
+            val wasInside = !lastMarker.isNaN() &&
+                    lastMarker >= target.left - 5f &&
+                    lastMarker <= target.right + 5f
+
+            // Fire exactly once when the moving marker ENTERS the target.
+            // Staying over the target on subsequent frames does not click again.
+            if (inside && !wasInside && !roundTriggered) {
                 val now = SystemClock.elapsedRealtime()
-                if (now - lastTrigger >= 700L) {
+                if (now - lastTrigger >= 350L) {
                     lastTrigger = now
+                    roundTriggered = true
                     triggerAlt()
                 }
             }
+
+            lastMarker = marker
         } finally {
             image.close()
         }
