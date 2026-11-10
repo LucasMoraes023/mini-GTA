@@ -10,20 +10,49 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
 import android.content.pm.ServiceInfo
+import kotlin.math.abs
 
 class CaptureService : Service() {
     private var projection: MediaProjection? = null
     private var reader: ImageReader? = null
-    private var lastTrigger = 0L
     private var processing = false
-    private var roundTriggered = false
-    private var targetCenter = Float.NaN
-    private var lastMarker = Float.NaN
-    private var targetMissingFrames = 0
-    private var targetStableFrames = 0
-    private var markerOutsideFrames = 0
-    private var markerInsideFrames = 0
-    private var armed = false
+    private var lastTrigger = 0L
+
+    // Fishing UI state:
+    // IDLE = nothing useful on screen
+    // BOX = the black "PUSH O PEIXE / ABORT" box is visible
+    // ACTIVE = the white progress bar + green target are visible
+    private enum class State { IDLE, BOX, ACTIVE }
+    private var state = State.IDLE
+
+    private var boxFrames = 0
+    private var activeFrames = 0
+    private var missingFrames = 0
+    private var triggeredThisRound = false
+
+    private var lastTargetCenter = Float.NaN
+    private var lastWhiteCenter = Float.NaN
+    private var whiteDirection = 0
+    private var whiteMovingFrames = 0
+    private var whiteInsideFrames = 0
+    private var whiteOutsideFrames = 0
+
+    private data class RectF2(
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int
+    ) {
+        val width get() = right - left
+        val height get() = bottom - top
+    }
+
+    private data class Bar(
+        val left: Int,
+        val right: Int,
+        val top: Int,
+        val bottom: Int
+    )
 
     override fun onStartCommand(i: Intent?, flags: Int, startId: Int): Int {
         createChannel()
@@ -48,7 +77,12 @@ class CaptureService : Service() {
 
         val m = resources.displayMetrics
         reader?.close()
-        reader = ImageReader.newInstance(m.widthPixels, m.heightPixels, PixelFormat.RGBA_8888, 2)
+        reader = ImageReader.newInstance(
+            m.widthPixels,
+            m.heightPixels,
+            PixelFormat.RGBA_8888,
+            2
+        )
 
         projection?.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
@@ -83,15 +117,9 @@ class CaptureService : Service() {
         return START_STICKY
     }
 
-    private data class Target(
-        val left: Float,
-        val right: Float,
-        val top: Float,
-        val bottom: Float
-    )
-
     private fun process(image: Image?) {
         image ?: return
+
         try {
             val p = image.planes[0]
             val b = p.buffer
@@ -102,154 +130,383 @@ class CaptureService : Service() {
             val data = ByteArray(b.remaining())
             b.get(data)
 
-            val target = findGreenTarget(data, w, h, px, row)
+            // IMPORTANT: We do not search the whole screen for green anymore.
+            // First locate the black fishing dialog. Only then do we inspect
+            // the horizontal white bar inside that dialog.
+            val box = findFishingBox(data, w, h, px, row)
+
+            if (box == null) {
+                resetRoundAfterMissing()
+                return
+            }
+
+            if (state == State.IDLE) {
+                state = State.BOX
+                boxFrames = 1
+            } else {
+                boxFrames++
+            }
+
+            // The black dialog itself is NOT enough to click ALT.
+            // We wait until a real white horizontal bar and its green target
+            // are both detected inside the same dialog.
+            val bar = findWhiteProgressBar(data, w, h, px, row, box)
+
+            if (bar == null) {
+                activeFrames = 0
+                if (state == State.ACTIVE) {
+                    // Keep the round latched for a few frames in case the
+                    // capture skips one frame.
+                    missingFrames++
+                    if (missingFrames >= 6) resetRound()
+                }
+                return
+            }
+
+            val target = findGreenTargetInBar(data, px, row, bar)
+
             if (target == null) {
-                targetMissingFrames++
-                if (targetMissingFrames >= 8) {
-                    roundTriggered = false
-                    targetCenter = Float.NaN
-                    lastMarker = Float.NaN
-                    targetStableFrames = 0
-                    markerOutsideFrames = 0
-                    markerInsideFrames = 0
-                    armed = false
-                }
+                activeFrames = 0
                 return
             }
 
-            targetMissingFrames = 0
-            val center = (target.left + target.right) / 2f
-
-            // Do not react to the first green frame. The target must remain
-            // stable for several frames before this round can be considered.
-            if (targetCenter.isNaN() || kotlin.math.abs(center - targetCenter) > 18f) {
-                targetCenter = center
-                roundTriggered = false
-                lastMarker = Float.NaN
-                targetStableFrames = 0
-                markerOutsideFrames = 0
-                markerInsideFrames = 0
-                armed = false
+            // Only now is the fishing minigame considered ACTIVE.
+            missingFrames = 0
+            if (state != State.ACTIVE) {
+                state = State.ACTIVE
+                activeFrames = 1
+                triggeredThisRound = false
+                lastTargetCenter = Float.NaN
+                lastWhiteCenter = Float.NaN
+                whiteDirection = 0
+                whiteMovingFrames = 0
+                whiteInsideFrames = 0
+                whiteOutsideFrames = 0
             } else {
-                targetStableFrames++
+                activeFrames++
             }
 
-            // The green box can appear before the moving bar starts. We only
-            // arm after seeing the bright moving marker clearly OUTSIDE the
-            // green target for several consecutive frames.
-            val marker = findBrightMarker(data, w, h, px, row, target) ?: run {
-                lastMarker = Float.NaN
-                markerInsideFrames = 0
+            val targetCenter = target.first
+            val targetHalfWidth = target.second
+
+            // Find the moving WHITE section/marker on the bar, but exclude
+            // the green target itself. We use temporal movement, not simply
+            // "there is something white", so the static white background of
+            // the bar cannot trigger ALT.
+            val whiteCenter = findMovingWhiteCenter(
+                data, px, row, bar, targetCenter, targetHalfWidth
+            )
+
+            if (whiteCenter == null || activeFrames < 3) {
+                whiteOutsideFrames = 0
+                whiteInsideFrames = 0
                 return
             }
 
-            val inside = marker >= target.left - 4f && marker <= target.right + 4f
+            if (!lastTargetCenter.isNaN() && abs(targetCenter - lastTargetCenter) > 10f) {
+                // New target position = new round/attempt. Never click just
+                // because the green point moved.
+                triggeredThisRound = false
+                whiteMovingFrames = 0
+                whiteInsideFrames = 0
+                whiteOutsideFrames = 0
+                lastWhiteCenter = Float.NaN
+            }
+            lastTargetCenter = targetCenter
 
-            if (!inside) {
-                markerOutsideFrames++
-                markerInsideFrames = 0
-                if (targetStableFrames >= 5 && markerOutsideFrames >= 3) {
-                    armed = true
+            if (!lastWhiteCenter.isNaN()) {
+                val dx = whiteCenter - lastWhiteCenter
+                val newDirection = when {
+                    dx > 1.2f -> 1
+                    dx < -1.2f -> -1
+                    else -> 0
                 }
-            } else if (armed && !roundTriggered) {
-                markerInsideFrames++
-            } else {
-                markerInsideFrames = 0
+
+                if (newDirection != 0) {
+                    if (whiteDirection == 0 || newDirection == whiteDirection) {
+                        whiteMovingFrames++
+                    } else {
+                        // Direction changed: still movement, but do not
+                        // immediately fire on a noisy reversal.
+                        whiteMovingFrames = 1
+                    }
+                    whiteDirection = newDirection
+                }
             }
 
-            // Require the marker to actually enter and remain in the target
-            // for two consecutive frames. This suppresses one-frame noise and
-            // prevents the initial UI from causing a premature tap.
-            if (armed && !roundTriggered && markerInsideFrames >= 2) {
+            val inside = whiteCenter >= targetCenter - targetHalfWidth &&
+                    whiteCenter <= targetCenter + targetHalfWidth
+
+            if (inside) {
+                whiteInsideFrames++
+                whiteOutsideFrames = 0
+            } else {
+                whiteOutsideFrames++
+                whiteInsideFrames = 0
+            }
+
+            // The marker must have genuinely moved before we allow a click.
+            // Then it must enter the green target for two consecutive frames.
+            if (!triggeredThisRound &&
+                whiteMovingFrames >= 3 &&
+                whiteInsideFrames >= 2
+            ) {
                 val now = SystemClock.elapsedRealtime()
-                if (now - lastTrigger >= 350L) {
+                if (now - lastTrigger >= 500L) {
+                    triggeredThisRound = true
                     lastTrigger = now
-                    roundTriggered = true
-                    armed = false
                     triggerAlt()
                 }
             }
 
-            lastMarker = marker
+            lastWhiteCenter = whiteCenter
         } finally {
             image.close()
         }
     }
 
-    private fun findGreenTarget(
+    private fun findFishingBox(
         data: ByteArray,
         w: Int,
         h: Int,
         px: Int,
         row: Int
-    ): Target? {
-        var minX = w
-        var maxX = -1
-        var minY = h
-        var maxY = -1
-        var count = 0
+    ): RectF2? {
+        // Look for a large, dark, roughly rectangular region. We sample
+        // coarsely because this runs on every captured frame.
+        val step = 8
+        var best: RectF2? = null
+        var bestScore = 0
 
-        for (y in 0 until h step 4) {
-            for (x in 0 until w step 4) {
-                val o = y * row + x * px
-                if (o + 2 >= data.size) continue
+        // Most game dialogs are central, so ignore a small edge margin.
+        val xStart = (w * 0.08f).toInt()
+        val xEnd = (w * 0.92f).toInt()
+        val yStart = (h * 0.15f).toInt()
+        val yEnd = (h * 0.88f).toInt()
 
-                val r = data[o].toInt() and 255
-                val g = data[o + 1].toInt() and 255
-                val bl = data[o + 2].toInt() and 255
-
-                if (g > 135 && g > r * 1.35 && g > bl * 1.25) {
-                    minX = minOf(minX, x)
-                    maxX = maxOf(maxX, x)
-                    minY = minOf(minY, y)
-                    maxY = maxOf(maxY, y)
-                    count++
+        // Build horizontal dark-run candidates. We then require multiple
+        // dark rows at the same x range to avoid treating random dark UI as
+        // the fishing dialog.
+        for (y in yStart until yEnd step step) {
+            var runStart = -1
+            for (x in xStart until xEnd step step) {
+                val dark = isDark(data, x, y, px, row)
+                if (dark && runStart < 0) {
+                    runStart = x
+                } else if (!dark && runStart >= 0) {
+                    val runWidth = x - runStart
+                    if (runWidth > w * 0.28f) {
+                        val candidate = RectF2(
+                            runStart,
+                            maxOf(y - step, 0),
+                            x,
+                            minOf(y + step, h - 1)
+                        )
+                        val score = runWidth
+                        if (score > bestScore) {
+                            best = candidate
+                            bestScore = score
+                        }
+                    }
+                    runStart = -1
                 }
             }
         }
 
-        return if (count >= 8 && maxX - minX >= 8 && maxY - minY >= 2) {
-            Target(minX.toFloat(), maxX.toFloat(), minY.toFloat(), maxY.toFloat())
-        } else {
-            null
-        }
+        val b = best ?: return null
+
+        // Expand around the detected dark run. This creates the ROI in which
+        // the white bar and green target must be found.
+        val left = (b.left - b.width * 0.05f).toInt().coerceAtLeast(0)
+        val right = (b.right + b.width * 0.05f).toInt().coerceAtMost(w - 1)
+        val top = (b.top - h * 0.03f).toInt().coerceAtLeast(0)
+        val bottom = (b.bottom + h * 0.18f).toInt().coerceAtMost(h - 1)
+
+        return RectF2(left, top, right, bottom)
     }
 
-    private fun findBrightMarker(
+    private fun findWhiteProgressBar(
         data: ByteArray,
         w: Int,
         h: Int,
         px: Int,
         row: Int,
-        t: Target
-    ): Float? {
-        val y0 = t.top.toInt().coerceAtLeast(0)
-        val y1 = t.bottom.toInt().coerceAtMost(h - 1)
-        var best = -1
-        var score = 0
+        box: RectF2
+    ): Bar? {
+        var best: Bar? = null
+        var bestScore = 0
 
-        for (x in t.left.toInt()..t.right.toInt() step 3) {
-            var s = 0
-            var y = y0
-            while (y <= y1) {
-                val o = y * row + x * px
-                if (o + 2 < data.size) {
-                    val r = data[o].toInt() and 255
-                    val g = data[o + 1].toInt() and 255
-                    val bl = data[o + 2].toInt() and 255
-                    val hi = maxOf(r, g, bl)
-                    val spread = maxOf(r, g, bl) - minOf(r, g, bl)
-                    if (hi > 205 && spread < 45) s++
+        val minWidth = maxOf((box.width * 0.25f).toInt(), 80)
+
+        // The fishing bar is horizontal. Search for long bright runs inside
+        // the black dialog only.
+        for (y in box.top until box.bottom step 3) {
+            var start = -1
+            for (x in box.left until box.right step 3) {
+                val bright = isWhite(data, x, y, px, row)
+                if (bright && start < 0) {
+                    start = x
+                } else if (!bright && start >= 0) {
+                    val width = x - start
+                    if (width >= minWidth) {
+                        val score = width
+                        if (score > bestScore) {
+                            bestScore = score
+                            best = Bar(
+                                left = start,
+                                right = x,
+                                top = maxOf(box.top, y - 4),
+                                bottom = minOf(box.bottom, y + 4)
+                            )
+                        }
+                    }
+                    start = -1
                 }
-                y += 3
-            }
-            if (s > score) {
-                score = s
-                best = x
             }
         }
 
-        return if (best >= 0 && score >= 2) best.toFloat() else null
+        return best
+    }
+
+    private fun findGreenTargetInBar(
+        data: ByteArray,
+        px: Int,
+        row: Int,
+        bar: Bar
+    ): Pair<Float, Float>? {
+        var minX = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE
+        var count = 0
+
+        for (y in bar.top..bar.bottom step 2) {
+            for (x in bar.left..bar.right step 2) {
+                val o = y * row + x * px
+                if (o + 2 >= data.size) continue
+
+                val r = data[o].toInt() and 255
+                val g = data[o + 1].toInt() and 255
+                val b = data[o + 2].toInt() and 255
+
+                // Small green target: strong G dominance, but keep this
+                // confined to the actual white bar.
+                if (g >= 105 && g > r * 1.25f && g > b * 1.15f) {
+                    minX = minOf(minX, x)
+                    maxX = maxOf(maxX, x)
+                    count++
+                }
+            }
+        }
+
+        if (count < 3 || minX == Int.MAX_VALUE) return null
+
+        val width = maxX - minX
+        if (width < 2 || width > bar.right - bar.left) return null
+
+        val center = (minX + maxX) / 2f
+        val halfWidth = maxOf(width / 2f, 4f)
+        return center to halfWidth
+    }
+
+    private fun findMovingWhiteCenter(
+        data: ByteArray,
+        px: Int,
+        row: Int,
+        bar: Bar,
+        targetCenter: Float,
+        targetHalfWidth: Float
+    ): Float? {
+        // Look for a narrow high-contrast white feature on the bar.
+        // Exclude the green target area. The bar background itself is
+        // relatively uniform, so use per-column contrast to find the moving
+        // bright segment.
+        var bestX = -1
+        var bestScore = 0
+
+        val exclusion = targetHalfWidth + 7f
+
+        for (x in bar.left..bar.right step 2) {
+            if (abs(x - targetCenter) <= exclusion) continue
+
+            var bright = 0
+            var dark = 0
+
+            for (y in bar.top..bar.bottom) {
+                val o = y * row + x * px
+                if (o + 2 >= data.size) continue
+
+                val r = data[o].toInt() and 255
+                val g = data[o + 1].toInt() and 255
+                val b = data[o + 2].toInt() and 255
+                val hi = maxOf(r, g, b)
+                val lo = minOf(r, g, b)
+
+                if (hi >= 225 && hi - lo < 35) bright++
+                if (hi <= 95) dark++
+            }
+
+            // A moving marker is expected to create a local bright/dark
+            // contrast. Uniform bar pixels get a much lower score.
+            val score = bright * 3 + dark
+            if (score > bestScore) {
+                bestScore = score
+                bestX = x
+            }
+        }
+
+        return if (bestX >= 0 && bestScore >= 8) bestX.toFloat() else null
+    }
+
+    private fun isDark(
+        data: ByteArray,
+        x: Int,
+        y: Int,
+        px: Int,
+        row: Int
+    ): Boolean {
+        val o = y * row + x * px
+        if (o + 2 >= data.size) return false
+        val r = data[o].toInt() and 255
+        val g = data[o + 1].toInt() and 255
+        val b = data[o + 2].toInt() and 255
+        return r < 55 && g < 55 && b < 55
+    }
+
+    private fun isWhite(
+        data: ByteArray,
+        x: Int,
+        y: Int,
+        px: Int,
+        row: Int
+    ): Boolean {
+        val o = y * row + x * px
+        if (o + 2 >= data.size) return false
+        val r = data[o].toInt() and 255
+        val g = data[o + 1].toInt() and 255
+        val b = data[o + 2].toInt() and 255
+        val hi = maxOf(r, g, b)
+        val lo = minOf(r, g, b)
+        return hi >= 205 && hi - lo <= 45
+    }
+
+    private fun resetRoundAfterMissing() {
+        missingFrames++
+        if (missingFrames >= 8) {
+            resetRound()
+        }
+    }
+
+    private fun resetRound() {
+        state = State.IDLE
+        boxFrames = 0
+        activeFrames = 0
+        missingFrames = 0
+        triggeredThisRound = false
+        lastTargetCenter = Float.NaN
+        lastWhiteCenter = Float.NaN
+        whiteDirection = 0
+        whiteMovingFrames = 0
+        whiteInsideFrames = 0
+        whiteOutsideFrames = 0
     }
 
     private fun triggerAlt() {
