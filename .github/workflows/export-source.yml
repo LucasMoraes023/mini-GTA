@@ -1,0 +1,22 @@
+name: Export source ZIP
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Create source ZIP
+        run: |
+          zip -r mini-GTA-source.zip . -x ".git/*" ".github/workflows/export-source.yml"
+      - name: Upload source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-GTA-source
+          path: mini-GTA-source.zip
+          retention-days: 7
