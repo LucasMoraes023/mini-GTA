@@ -25,6 +25,10 @@ class FishingAccessibilityService : AccessibilityService() {
         fun tap(x: Float, y: Float): Boolean {
             return instance?.dispatchTap(x, y) == true
         }
+
+        fun updateStatus(message: String) {
+            instance?.mainHandler?.post { instance?.showStatus(message) }
+        }
     }
 
     private lateinit var wm: WindowManager
@@ -32,6 +36,7 @@ class FishingAccessibilityService : AccessibilityService() {
     private var menu: LinearLayout? = null
     private var calibrationMarker: TextView? = null
     private var calibrationPanel: LinearLayout? = null
+    private var statusPanel: TextView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onServiceConnected() {
@@ -69,6 +74,31 @@ class FishingAccessibilityService : AccessibilityService() {
         p.y = dp(180)
         wm.addView(b, p)
         floatingButton = b
+        showStatus("CAPTURA DESLIGADA • abra o app e toque ATIVAR CAPTURA")
+    }
+
+    private fun showStatus(message: String) {
+        val existing = statusPanel
+        if (existing != null) {
+            existing.text = message
+            return
+        }
+
+        val t = TextView(this).apply {
+            text = message
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            setPadding(dp(10), dp(7), dp(10), dp(7))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(Color.argb(220, 8, 12, 15))
+                setStroke(dp(1), Color.rgb(45, 210, 125))
+            }
+        }
+        val p = overlayParams(dp(330), dp(52), Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+        p.y = dp(105)
+        wm.addView(t, p)
+        statusPanel = t
     }
 
     private fun toggleMenu() {
@@ -254,6 +284,10 @@ class FishingAccessibilityService : AccessibilityService() {
             try { wm.removeView(it) } catch (_: Throwable) {}
         }
         floatingButton = null
+        statusPanel?.let {
+            try { wm.removeView(it) } catch (_: Throwable) {}
+        }
+        statusPanel = null
         instance = null
         super.onDestroy()
     }
