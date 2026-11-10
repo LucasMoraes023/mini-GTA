@@ -20,6 +20,10 @@ class CaptureService : Service() {
     private var targetCenter = Float.NaN
     private var lastMarker = Float.NaN
     private var targetMissingFrames = 0
+    private var targetStableFrames = 0
+    private var markerOutsideFrames = 0
+    private var markerInsideFrames = 0
+    private var armed = false
 
     override fun onStartCommand(i: Intent?, flags: Int, startId: Int): Int {
         createChannel()
@@ -101,10 +105,14 @@ class CaptureService : Service() {
             val target = findGreenTarget(data, w, h, px, row)
             if (target == null) {
                 targetMissingFrames++
-                if (targetMissingFrames >= 3) {
+                if (targetMissingFrames >= 8) {
                     roundTriggered = false
                     targetCenter = Float.NaN
                     lastMarker = Float.NaN
+                    targetStableFrames = 0
+                    markerOutsideFrames = 0
+                    markerInsideFrames = 0
+                    armed = false
                 }
                 return
             }
@@ -112,31 +120,52 @@ class CaptureService : Service() {
             targetMissingFrames = 0
             val center = (target.left + target.right) / 2f
 
-            // A new green target means a new fishing round. Re-arm only when
-            // the target actually moves to a different position.
+            // Do not react to the first green frame. The target must remain
+            // stable for several frames before this round can be considered.
             if (targetCenter.isNaN() || kotlin.math.abs(center - targetCenter) > 18f) {
                 targetCenter = center
                 roundTriggered = false
                 lastMarker = Float.NaN
+                targetStableFrames = 0
+                markerOutsideFrames = 0
+                markerInsideFrames = 0
+                armed = false
+            } else {
+                targetStableFrames++
             }
 
+            // The green box can appear before the moving bar starts. We only
+            // arm after seeing the bright moving marker clearly OUTSIDE the
+            // green target for several consecutive frames.
             val marker = findBrightMarker(data, w, h, px, row, target) ?: run {
                 lastMarker = Float.NaN
+                markerInsideFrames = 0
                 return
             }
 
-            val inside = marker >= target.left - 5f && marker <= target.right + 5f
-            val wasInside = !lastMarker.isNaN() &&
-                    lastMarker >= target.left - 5f &&
-                    lastMarker <= target.right + 5f
+            val inside = marker >= target.left - 4f && marker <= target.right + 4f
 
-            // Fire exactly once when the moving marker ENTERS the target.
-            // Staying over the target on subsequent frames does not click again.
-            if (inside && !wasInside && !roundTriggered) {
+            if (!inside) {
+                markerOutsideFrames++
+                markerInsideFrames = 0
+                if (targetStableFrames >= 5 && markerOutsideFrames >= 3) {
+                    armed = true
+                }
+            } else if (armed && !roundTriggered) {
+                markerInsideFrames++
+            } else {
+                markerInsideFrames = 0
+            }
+
+            // Require the marker to actually enter and remain in the target
+            // for two consecutive frames. This suppresses one-frame noise and
+            // prevents the initial UI from causing a premature tap.
+            if (armed && !roundTriggered && markerInsideFrames >= 2) {
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastTrigger >= 350L) {
                     lastTrigger = now
                     roundTriggered = true
+                    armed = false
                     triggerAlt()
                 }
             }
