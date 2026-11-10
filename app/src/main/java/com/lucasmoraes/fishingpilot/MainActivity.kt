@@ -5,6 +5,8 @@ import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.provider.Settings
+import android.content.pm.PackageManager
+import rikka.shizuku.Shizuku
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -23,13 +25,28 @@ class MainActivity : Activity() {
         val sub=TextView(this).apply { text="Detecção local • alinhamento automático • baixa latência"; textSize=14f; setTextColor(0xFF9AA5AD.toInt()); setPadding(0,8,0,28) }
         status=TextView(this).apply { text="Pronto"; textSize=16f; setTextColor(0xFF26D07C.toInt()); setPadding(0,0,0,20) }
         val accessibility=Button(this).apply { text="ATIVAR CONTROLE ALT"; setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } }
+        val shizuku=Button(this).apply { text="CONFIGURAR ALT REAL (SHIZUKU)"; setOnClickListener { setupShizuku() } }
         val start=Button(this).apply { text="ATIVAR CAPTURA"; setOnClickListener { requestProjection() } }
         val stop=Button(this).apply { text="PARAR"; setOnClickListener { stopService(Intent(this@MainActivity,CaptureService::class.java)); status.text="Parado" } }
         val info=TextView(this).apply {
             text="1) Ative o serviço de acessibilidade. 2) Ative a captura. 3) O acionamento usa o botão ALT configurado e, quando permitido pelo aparelho, tenta também o evento de teclado ALT. O alvo verde é recalculado a cada rodada."
             setTextColor(0xFFB8C1C8.toInt()); textSize=14f; setPadding(0,24,0,0)
         }
-        root.addView(title); root.addView(sub); root.addView(status); root.addView(accessibility); root.addView(start); root.addView(stop); root.addView(info); setContentView(root)
+        root.addView(title); root.addView(sub); root.addView(status); root.addView(accessibility); root.addView(shizuku); root.addView(start); root.addView(stop); root.addView(info); setContentView(root)
+    }
+
+    private fun setupShizuku() {
+        try {
+            if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+                status.text = "Shizuku ativo • ALT real habilitado"
+            } else if (Shizuku.pingBinder()) {
+                Shizuku.requestPermission(42)
+            } else {
+                startActivity(Intent().setPackage("moe.shizuku.privileged.api"))
+            }
+        } catch (_: Throwable) {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
     }
 
     private fun requestProjection() {
