@@ -36,6 +36,7 @@ class CaptureService : Service() {
     private var whiteMovingFrames = 0
     private var whiteInsideFrames = 0
     private var whiteOutsideFrames = 0
+    private var previousWhiteProfile = IntArray(0)
 
     private data class RectF2(
         val left: Int,
@@ -343,7 +344,7 @@ class CaptureService : Service() {
         var best: Bar? = null
         var bestScore = 0
 
-        val minWidth = maxOf((box.width * 0.18f).toInt(), 40)
+        val minWidth = maxOf((box.width * 0.08f).toInt(), 18)
 
         for (y in box.top until box.bottom step 2) {
             var first = -1
@@ -367,7 +368,7 @@ class CaptureService : Service() {
                 }
             }
 
-            if (first >= 0 && last - first >= minWidth && count >= 8) {
+            if (first >= 0 && last - first >= minWidth && count >= 4) {
                 val score = count + (last - first) / 2
                 if (score > bestScore) {
                     bestScore = score
@@ -431,45 +432,46 @@ class CaptureService : Service() {
         targetCenter: Float,
         targetHalfWidth: Float
     ): Float? {
-        // Look for a narrow high-contrast white feature on the bar.
-        // Exclude the green target area. The bar background itself is
-        // relatively uniform, so use per-column contrast to find the moving
-        // bright segment.
+        val width = ((bar.right - bar.left) / 2) + 1
+        if (width <= 0) return null
+        if (previousWhiteProfile.size != width) {
+            previousWhiteProfile = IntArray(width)
+        }
+
         var bestX = -1
         var bestScore = 0
-
+        val current = IntArray(width)
         val exclusion = targetHalfWidth + 7f
 
-        for (x in bar.left..bar.right step 2) {
-            if (abs(x - targetCenter) <= exclusion) continue
+        for (i in 0 until width) {
+            val x = bar.left + i * 2
+            if (x > bar.right || abs(x - targetCenter) <= exclusion) continue
 
             var bright = 0
             var dark = 0
-
             for (y in bar.top..bar.bottom) {
                 val o = y * row + x * px
                 if (o + 2 >= data.size) continue
-
                 val r = data[o].toInt() and 255
                 val g = data[o + 1].toInt() and 255
                 val b = data[o + 2].toInt() and 255
                 val hi = maxOf(r, g, b)
                 val lo = minOf(r, g, b)
-
-                if (hi >= 225 && hi - lo < 35) bright++
-                if (hi <= 95) dark++
+                if (hi >= 220 && hi - lo <= 45) bright++
+                if (hi <= 100) dark++
             }
 
-            // A moving marker is expected to create a local bright/dark
-            // contrast. Uniform bar pixels get a much lower score.
-            val score = bright * 3 + dark
+            current[i] = bright
+            val delta = abs(bright - previousWhiteProfile[i])
+            val score = bright * 2 + dark + delta * 5
             if (score > bestScore) {
                 bestScore = score
                 bestX = x
             }
         }
 
-        return if (bestX >= 0 && bestScore >= 8) bestX.toFloat() else null
+        previousWhiteProfile = current
+        return if (bestX >= 0 && bestScore >= 10) bestX.toFloat() else null
     }
 
     private fun isDark(
@@ -523,6 +525,7 @@ class CaptureService : Service() {
         whiteMovingFrames = 0
         whiteInsideFrames = 0
         whiteOutsideFrames = 0
+        previousWhiteProfile = IntArray(0)
     }
 
     private fun triggerAlt() {
