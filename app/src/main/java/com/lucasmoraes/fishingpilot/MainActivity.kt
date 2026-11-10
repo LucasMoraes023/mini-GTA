@@ -2,6 +2,7 @@ package com.lucasmoraes.fishingpilot
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.provider.Settings
@@ -52,6 +53,18 @@ class MainActivity : Activity() {
             }
         }
 
+        val overlay = Button(this).apply {
+            text = "LIBERAR BOTÃO FLUTUANTE"
+            setOnClickListener {
+                if (android.os.Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this@MainActivity)) {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                } else {
+                    status.text = "Permissão de janela flutuante já liberada"
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+            }
+        }
+
         val calibrate = Button(this).apply {
             text = "CALIBRAR BOTÃO ALT"
             setOnClickListener {
@@ -89,6 +102,7 @@ class MainActivity : Activity() {
         root.addView(sub)
         root.addView(status)
         root.addView(accessibility)
+        root.addView(overlay)
         root.addView(calibrate)
         root.addView(start)
         root.addView(stop)
