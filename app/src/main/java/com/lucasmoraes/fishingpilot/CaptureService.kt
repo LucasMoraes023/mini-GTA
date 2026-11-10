@@ -37,6 +37,11 @@ class CaptureService : Service() {
     private var whiteInsideFrames = 0
     private var whiteOutsideFrames = 0
     private var previousWhiteProfile = IntArray(0)
+    private var previousFrame = ByteArray(0)
+    private var previousFrameWidth = 0
+    private var previousFrameHeight = 0
+    private var framesReceived = 0L
+    private var lastDiagnostic = 0L
 
     private data class RectF2(
         val left: Int,
@@ -130,6 +135,7 @@ class CaptureService : Service() {
             val row = p.rowStride
             val data = ByteArray(b.remaining())
             b.get(data)
+            framesReceived++
 
             // IMPORTANT: We do not search the whole screen for green anymore.
             // First locate the black fishing dialog. Only then do we inspect
@@ -138,6 +144,9 @@ class CaptureService : Service() {
 
             if (box == null) {
                 resetRoundAfterMissing()
+                previousFrame = data.copyOf()
+                previousFrameWidth = w
+                previousFrameHeight = h
                 return
             }
 
@@ -154,6 +163,9 @@ class CaptureService : Service() {
             val bar = findWhiteProgressBar(data, w, h, px, row, box)
 
             if (bar == null) {
+                previousFrame = data.copyOf()
+                previousFrameWidth = w
+                previousFrameHeight = h
                 activeFrames = 0
                 if (state == State.ACTIVE) {
                     // Keep the round latched for a few frames in case the
@@ -167,6 +179,9 @@ class CaptureService : Service() {
             val target = findGreenTargetInBar(data, px, row, bar)
 
             if (target == null) {
+                previousFrame = data.copyOf()
+                previousFrameWidth = w
+                previousFrameHeight = h
                 activeFrames = 0
                 return
             }
@@ -199,6 +214,9 @@ class CaptureService : Service() {
             )
 
             if (whiteCenter == null || activeFrames < 3) {
+                previousFrame = data.copyOf()
+                previousFrameWidth = w
+                previousFrameHeight = h
                 whiteOutsideFrames = 0
                 whiteInsideFrames = 0
                 return
@@ -261,6 +279,11 @@ class CaptureService : Service() {
             }
 
             lastWhiteCenter = whiteCenter
+
+            // Keep the previous frame only after all analysis for this frame.
+            previousFrame = data.copyOf()
+            previousFrameWidth = w
+            previousFrameHeight = h
         } finally {
             image.close()
         }
@@ -482,65 +505,105 @@ class CaptureService : Service() {
         targetCenter: Float,
         targetHalfWidth: Float
     ): Float? {
-        val width = ((bar.right - bar.left) / 2) + 1
-        if (width <= 0) return null
-
-        if (previousWhiteProfile.size != width) {
-            previousWhiteProfile = IntArray(width)
+        // The important signal is not "white exists"; the static white part
+        // of the loading bar is always present. We compare consecutive
+        // captured frames and look for WHITE pixels that actually changed
+        // position. This follows the moving marker instead of the bar.
+        if (previousFrame.isEmpty() ||
+            previousFrameWidth <= 0 ||
+            previousFrameHeight <= 0
+        ) {
+            return null
         }
 
-        val current = IntArray(width)
-        var bestX = -1
+        val candidates = ArrayList<Pair<Int, Int>>()
+        val exclusion = targetHalfWidth + 4f
+
+        val left = bar.left.coerceAtLeast(0)
+        val right = bar.right.coerceAtLeast(left)
+        val top = bar.top.coerceAtLeast(0)
+        val bottom = bar.bottom.coerceAtLeast(top)
+
+        var x = left
+        while (x <= right) {
+            if (abs(x - targetCenter) > exclusion) {
+                var changedWhite = 0
+                var totalWhite = 0
+
+                var y = top
+                while (y <= bottom) {
+                    val o = y * row + x * px
+                    if (o + 2 < data.size && o + 2 < previousFrame.size) {
+                        val r = data[o].toInt() and 255
+                        val g = data[o + 1].toInt() and 255
+                        val b = data[o + 2].toInt() and 255
+
+                        val pr = previousFrame[o].toInt() and 255
+                        val pg = previousFrame[o + 1].toInt() and 255
+                        val pb = previousFrame[o + 2].toInt() and 255
+
+                        val hi = maxOf(r, g, b)
+                        val lo = minOf(r, g, b)
+                        val white = hi >= 185 && hi - lo <= 65
+
+                        if (white) {
+                            totalWhite++
+                            val delta = abs(r - pr) + abs(g - pg) + abs(b - pb)
+                            if (delta >= 45) changedWhite++
+                        }
+                    }
+                    y += 2
+                }
+
+                // A marker column should contain white pixels AND those white
+                // pixels should have changed since the previous frame.
+                if (changedWhite >= 2 && totalWhite >= changedWhite) {
+                    candidates.add(x to changedWhite)
+                }
+            }
+            x += 2
+        }
+
+        if (candidates.isEmpty()) return null
+
+        // Use the strongest contiguous candidate group so isolated UI noise
+        // cannot become the marker.
+        var bestStart = -1
+        var bestEnd = -1
         var bestScore = 0
-        val exclusion = targetHalfWidth + 5f
 
-        for (i in 0 until width) {
-            val x = minOf(bar.left + i * 2, bar.right)
+        var groupStart = candidates[0].first
+        var groupEnd = candidates[0].first
+        var groupScore = candidates[0].second
 
-            // The green target itself is not the white marker.
-            if (abs(x - targetCenter) <= exclusion) continue
+        for (i in 1 until candidates.size) {
+            val cx = candidates[i].first
+            val score = candidates[i].second
 
-            var white = 0
-            var changed = 0
-            var edge = 0
-
-            for (y in bar.top..bar.bottom) {
-                val o = y * row + x * px
-                if (o + 2 >= data.size) continue
-
-                val r = data[o].toInt() and 255
-                val g = data[o + 1].toInt() and 255
-                val b = data[o + 2].toInt() and 255
-                val hi = maxOf(r, g, b)
-                val lo = minOf(r, g, b)
-
-                val isWhiteNow = hi >= 190 && hi - lo <= 60
-                if (isWhiteNow) white++
-
-                // A moving white element produces a temporal edge even if
-                // the overall bar/background is static.
-                val prev = previousWhiteProfile[i]
-                val diff = abs(white - prev)
-                if (diff > 0) changed += diff
-
-                if (isWhiteNow && prev == 0) edge++
-            }
-
-            current[i] = white
-
-            // Favor a visible white component with temporal change. Do not
-            // require the component itself to be large; the game marker can
-            // be only a few pixels wide on some resolutions.
-            val score = white * 2 + changed * 8 + edge * 3
-            if (score > bestScore) {
-                bestScore = score
-                bestX = x
+            if (cx - groupEnd <= 6) {
+                groupEnd = cx
+                groupScore += score
+            } else {
+                if (groupScore > bestScore) {
+                    bestScore = groupScore
+                    bestStart = groupStart
+                    bestEnd = groupEnd
+                }
+                groupStart = cx
+                groupEnd = cx
+                groupScore = score
             }
         }
 
-        previousWhiteProfile = current
+        if (groupScore > bestScore) {
+            bestScore = groupScore
+            bestStart = groupStart
+            bestEnd = groupEnd
+        }
 
-        return if (bestX >= 0 && bestScore >= 8) bestX.toFloat() else null
+        if (bestStart < 0 || bestScore < 4) return null
+
+        return (bestStart + bestEnd) / 2f
     }
 
     private fun isDark(
@@ -595,6 +658,9 @@ class CaptureService : Service() {
         whiteInsideFrames = 0
         whiteOutsideFrames = 0
         previousWhiteProfile = IntArray(0)
+        previousFrame = ByteArray(0)
+        previousFrameWidth = 0
+        previousFrameHeight = 0
     }
 
     private fun triggerAlt() {
