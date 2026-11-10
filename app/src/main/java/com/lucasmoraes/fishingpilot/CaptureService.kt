@@ -273,61 +273,85 @@ class CaptureService : Service() {
         px: Int,
         row: Int
     ): RectF2? {
-        // The fishing dialog is black, but its exact size can vary with
-        // scaling. Instead of looking for one perfect dark rectangle, find
-        // the horizontal white/green fishing track first and use the dark
-        // area around it as the dialog ROI.
-        val step = 4
-        var best: RectF2? = null
-        var bestScore = 0
+        // Do NOT try to identify the dialog by its black background. That
+        // was the main false assumption in the previous detector: the game
+        // can render the dialog with different black levels, shadows and
+        // scaling. The green target is the reliable visual anchor.
+        //
+        // We scan the useful part of the screen for green pixels and build a
+        // generous ROI around the strongest green cluster. This also means
+        // "PUSH O PEIXE / ABORT" cannot trigger anything by itself.
+        var bestX = -1
+        var bestY = -1
+        var bestCount = 0
 
-        for (y in (h * 0.18f).toInt() until (h * 0.85f).toInt() step step) {
-            var whiteRun = 0
-            var greenCount = 0
-            var firstX = -1
-            var lastX = -1
+        val x0 = (w * 0.05f).toInt()
+        val x1 = (w * 0.95f).toInt()
+        val y0 = (h * 0.12f).toInt()
+        val y1 = (h * 0.88f).toInt()
 
-            for (x in (w * 0.05f).toInt() until (w * 0.95f).toInt() step step) {
-                val o = y * row + x * px
-                if (o + 2 >= data.size) continue
+        // Count green pixels in coarse cells. A target is a compact green
+        // object, unlike text/other UI which tends to be spread out.
+        val cellW = maxOf(24, w / 40)
+        val cellH = maxOf(16, h / 50)
 
-                val r = data[o].toInt() and 255
-                val g = data[o + 1].toInt() and 255
-                val b = data[o + 2].toInt() and 255
-                val hi = maxOf(r, g, b)
-                val lo = minOf(r, g, b)
+        var y = y0
+        while (y < y1) {
+            var x = x0
+            while (x < x1) {
+                var count = 0
+                var sx = 0
+                var sy = 0
 
-                val white = hi >= 205 && hi - lo <= 50
-                val green = g >= 105 && g > r * 1.25f && g > b * 1.15f
+                val yy1 = minOf(y + cellH, y1)
+                val xx1 = minOf(x + cellW, x1)
 
-                if (white) {
-                    if (firstX < 0) firstX = x
-                    lastX = x
-                    whiteRun++
-                } else if (!green) {
-                    whiteRun = 0
+                var yy = y
+                while (yy < yy1) {
+                    var xx = x
+                    while (xx < xx1) {
+                        val o = yy * row + xx * px
+                        if (o + 2 < data.size) {
+                            val r = data[o].toInt() and 255
+                            val g = data[o + 1].toInt() and 255
+                            val b = data[o + 2].toInt() and 255
+
+                            if (g >= 95 &&
+                                g > r * 1.22f &&
+                                g > b * 1.10f &&
+                                g - r >= 25
+                            ) {
+                                count++
+                                sx += xx
+                                sy += yy
+                            }
+                        }
+                        xx += 2
+                    }
+                    yy += 2
                 }
 
-                if (green) greenCount++
-            }
-
-            // A real fishing track has a substantial horizontal white
-            // component and a green target in the same neighborhood.
-            if (whiteRun >= 12 && greenCount >= 1 && firstX >= 0) {
-                val left = (firstX - w * 0.10f).toInt().coerceAtLeast(0)
-                val right = (lastX + w * 0.10f).toInt().coerceAtMost(w - 1)
-                val top = (y - h * 0.12f).toInt().coerceAtLeast(0)
-                val bottom = (y + h * 0.18f).toInt().coerceAtMost(h - 1)
-                val score = whiteRun * 3 + greenCount * 10
-
-                if (score > bestScore) {
-                    bestScore = score
-                    best = RectF2(left, top, right, bottom)
+                if (count > bestCount) {
+                    bestCount = count
+                    bestX = sx / count
+                    bestY = sy / count
                 }
+                x += cellW
             }
+            y += cellH
         }
 
-        return best
+        if (bestCount < 3 || bestX < 0 || bestY < 0) return null
+
+        // The track is horizontally laid out around the green target. Give
+        // the detector plenty of room so the moving white element is never
+        // clipped just because the green point moved to one side.
+        return RectF2(
+            left = (bestX - w * 0.45f).toInt().coerceAtLeast(0),
+            top = (bestY - h * 0.08f).toInt().coerceAtLeast(0),
+            right = (bestX + w * 0.45f).toInt().coerceAtMost(w - 1),
+            bottom = (bestY + h * 0.08f).toInt().coerceAtMost(h - 1)
+        )
     }
 
     private fun findWhiteProgressBar(
@@ -338,21 +362,25 @@ class CaptureService : Service() {
         row: Int,
         box: RectF2
     ): Bar? {
-        // The moving indicator is white on a dark dialog. We therefore do
-        // NOT require the entire bar to be white. Find a horizontal band
-        // containing enough white pixels to represent the fishing track.
+        // The previous version tried to infer the bar from the longest white
+        // horizontal run. That can select unrelated text. We instead use the
+        // green-anchor ROI and find the actual horizontal white activity
+        // around the target's vertical level.
         var best: Bar? = null
         var bestScore = 0
 
-        val minWidth = maxOf((box.width * 0.08f).toInt(), 18)
+        val centerY = (box.top + box.bottom) / 2
+        val band = maxOf(10, h / 45)
 
-        for (y in box.top until box.bottom step 2) {
+        for (cy in (centerY - band * 2)..(centerY + band * 2) step 2) {
+            if (cy < box.top || cy >= box.bottom) continue
+
             var first = -1
             var last = -1
             var count = 0
 
-            for (x in box.left until box.right step 2) {
-                val o = y * row + x * px
+            for (x in box.left..box.right step 2) {
+                val o = cy * row + x * px
                 if (o + 2 >= data.size) continue
 
                 val r = data[o].toInt() and 255
@@ -361,25 +389,36 @@ class CaptureService : Service() {
                 val hi = maxOf(r, g, b)
                 val lo = minOf(r, g, b)
 
-                if (hi >= 205 && hi - lo <= 50) {
+                if (hi >= 190 && hi - lo <= 60) {
                     if (first < 0) first = x
                     last = x
                     count++
                 }
             }
 
-            if (first >= 0 && last - first >= minWidth && count >= 4) {
-                val score = count + (last - first) / 2
+            if (first >= 0 && last - first >= 12 && count >= 4) {
+                val score = count * 3 + (last - first)
                 if (score > bestScore) {
                     bestScore = score
                     best = Bar(
                         left = first,
                         right = last,
-                        top = maxOf(box.top, y - 6),
-                        bottom = minOf(box.bottom, y + 6)
+                        top = maxOf(box.top, cy - band),
+                        bottom = minOf(box.bottom, cy + band)
                     )
                 }
             }
+        }
+
+        // If the white track is very thin or the capture sampled it between
+        // rows, keep the green ROI instead of declaring the screen absent.
+        if (best == null) {
+            best = Bar(
+                left = box.left,
+                right = box.right,
+                top = maxOf(box.top, centerY - band),
+                bottom = minOf(box.bottom, centerY + band)
+            )
         }
 
         return best
@@ -393,6 +432,8 @@ class CaptureService : Service() {
     ): Pair<Float, Float>? {
         var minX = Int.MAX_VALUE
         var maxX = Int.MIN_VALUE
+        var minY = Int.MAX_VALUE
+        var maxY = Int.MIN_VALUE
         var count = 0
 
         for (y in bar.top..bar.bottom step 2) {
@@ -404,20 +445,29 @@ class CaptureService : Service() {
                 val g = data[o + 1].toInt() and 255
                 val b = data[o + 2].toInt() and 255
 
-                // Small green target: strong G dominance, but keep this
-                // confined to the actual white bar.
-                if (g >= 105 && g > r * 1.25f && g > b * 1.15f) {
+                if (g >= 95 &&
+                    g > r * 1.22f &&
+                    g > b * 1.10f &&
+                    g - r >= 25
+                ) {
                     minX = minOf(minX, x)
                     maxX = maxOf(maxX, x)
+                    minY = minOf(minY, y)
+                    maxY = maxOf(maxY, y)
                     count++
                 }
             }
         }
 
-        if (count < 3 || minX == Int.MAX_VALUE) return null
+        if (count < 2 || minX == Int.MAX_VALUE) return null
 
         val width = maxX - minX
-        if (width < 2 || width > bar.right - bar.left) return null
+        val height = maxY - minY
+
+        // Reject a huge green region: the target should be compact.
+        if (width > bar.right - bar.left || height > (bar.bottom - bar.top)) {
+            return null
+        }
 
         val center = (minX + maxX) / 2f
         val halfWidth = maxOf(width / 2f, 4f)
@@ -434,36 +484,54 @@ class CaptureService : Service() {
     ): Float? {
         val width = ((bar.right - bar.left) / 2) + 1
         if (width <= 0) return null
+
         if (previousWhiteProfile.size != width) {
             previousWhiteProfile = IntArray(width)
         }
 
+        val current = IntArray(width)
         var bestX = -1
         var bestScore = 0
-        val current = IntArray(width)
-        val exclusion = targetHalfWidth + 7f
+        val exclusion = targetHalfWidth + 5f
 
         for (i in 0 until width) {
-            val x = bar.left + i * 2
-            if (x > bar.right || abs(x - targetCenter) <= exclusion) continue
+            val x = minOf(bar.left + i * 2, bar.right)
 
-            var bright = 0
-            var dark = 0
+            // The green target itself is not the white marker.
+            if (abs(x - targetCenter) <= exclusion) continue
+
+            var white = 0
+            var changed = 0
+            var edge = 0
+
             for (y in bar.top..bar.bottom) {
                 val o = y * row + x * px
                 if (o + 2 >= data.size) continue
+
                 val r = data[o].toInt() and 255
                 val g = data[o + 1].toInt() and 255
                 val b = data[o + 2].toInt() and 255
                 val hi = maxOf(r, g, b)
                 val lo = minOf(r, g, b)
-                if (hi >= 220 && hi - lo <= 45) bright++
-                if (hi <= 100) dark++
+
+                val isWhiteNow = hi >= 190 && hi - lo <= 60
+                if (isWhiteNow) white++
+
+                // A moving white element produces a temporal edge even if
+                // the overall bar/background is static.
+                val prev = previousWhiteProfile[i]
+                val diff = abs(white - prev)
+                if (diff > 0) changed += diff
+
+                if (isWhiteNow && prev == 0) edge++
             }
 
-            current[i] = bright
-            val delta = abs(bright - previousWhiteProfile[i])
-            val score = bright * 2 + dark + delta * 5
+            current[i] = white
+
+            // Favor a visible white component with temporal change. Do not
+            // require the component itself to be large; the game marker can
+            // be only a few pixels wide on some resolutions.
+            val score = white * 2 + changed * 8 + edge * 3
             if (score > bestScore) {
                 bestScore = score
                 bestX = x
@@ -471,7 +539,8 @@ class CaptureService : Service() {
         }
 
         previousWhiteProfile = current
-        return if (bestX >= 0 && bestScore >= 10) bestX.toFloat() else null
+
+        return if (bestX >= 0 && bestScore >= 8) bestX.toFloat() else null
     }
 
     private fun isDark(
