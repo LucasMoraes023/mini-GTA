@@ -272,57 +272,61 @@ class CaptureService : Service() {
         px: Int,
         row: Int
     ): RectF2? {
-        // Look for a large, dark, roughly rectangular region. We sample
-        // coarsely because this runs on every captured frame.
-        val step = 8
+        // The fishing dialog is black, but its exact size can vary with
+        // scaling. Instead of looking for one perfect dark rectangle, find
+        // the horizontal white/green fishing track first and use the dark
+        // area around it as the dialog ROI.
+        val step = 4
         var best: RectF2? = null
         var bestScore = 0
 
-        // Most game dialogs are central, so ignore a small edge margin.
-        val xStart = (w * 0.08f).toInt()
-        val xEnd = (w * 0.92f).toInt()
-        val yStart = (h * 0.15f).toInt()
-        val yEnd = (h * 0.88f).toInt()
+        for (y in (h * 0.18f).toInt() until (h * 0.85f).toInt() step step) {
+            var whiteRun = 0
+            var greenCount = 0
+            var firstX = -1
+            var lastX = -1
 
-        // Build horizontal dark-run candidates. We then require multiple
-        // dark rows at the same x range to avoid treating random dark UI as
-        // the fishing dialog.
-        for (y in yStart until yEnd step step) {
-            var runStart = -1
-            for (x in xStart until xEnd step step) {
-                val dark = isDark(data, x, y, px, row)
-                if (dark && runStart < 0) {
-                    runStart = x
-                } else if (!dark && runStart >= 0) {
-                    val runWidth = x - runStart
-                    if (runWidth > w * 0.28f) {
-                        val candidate = RectF2(
-                            runStart,
-                            maxOf(y - step, 0),
-                            x,
-                            minOf(y + step, h - 1)
-                        )
-                        val score = runWidth
-                        if (score > bestScore) {
-                            best = candidate
-                            bestScore = score
-                        }
-                    }
-                    runStart = -1
+            for (x in (w * 0.05f).toInt() until (w * 0.95f).toInt() step step) {
+                val o = y * row + x * px
+                if (o + 2 >= data.size) continue
+
+                val r = data[o].toInt() and 255
+                val g = data[o + 1].toInt() and 255
+                val b = data[o + 2].toInt() and 255
+                val hi = maxOf(r, g, b)
+                val lo = minOf(r, g, b)
+
+                val white = hi >= 205 && hi - lo <= 50
+                val green = g >= 105 && g > r * 1.25f && g > b * 1.15f
+
+                if (white) {
+                    if (firstX < 0) firstX = x
+                    lastX = x
+                    whiteRun++
+                } else if (!green) {
+                    whiteRun = 0
+                }
+
+                if (green) greenCount++
+            }
+
+            // A real fishing track has a substantial horizontal white
+            // component and a green target in the same neighborhood.
+            if (whiteRun >= 12 && greenCount >= 1 && firstX >= 0) {
+                val left = (firstX - w * 0.10f).toInt().coerceAtLeast(0)
+                val right = (lastX + w * 0.10f).toInt().coerceAtMost(w - 1)
+                val top = (y - h * 0.12f).toInt().coerceAtLeast(0)
+                val bottom = (y + h * 0.18f).toInt().coerceAtMost(h - 1)
+                val score = whiteRun * 3 + greenCount * 10
+
+                if (score > bestScore) {
+                    bestScore = score
+                    best = RectF2(left, top, right, bottom)
                 }
             }
         }
 
-        val b = best ?: return null
-
-        // Expand around the detected dark run. This creates the ROI in which
-        // the white bar and green target must be found.
-        val left = (b.left - b.width * 0.05f).toInt().coerceAtLeast(0)
-        val right = (b.right + b.width * 0.05f).toInt().coerceAtMost(w - 1)
-        val top = (b.top - h * 0.03f).toInt().coerceAtLeast(0)
-        val bottom = (b.bottom + h * 0.18f).toInt().coerceAtMost(h - 1)
-
-        return RectF2(left, top, right, bottom)
+        return best
     }
 
     private fun findWhiteProgressBar(
@@ -333,34 +337,46 @@ class CaptureService : Service() {
         row: Int,
         box: RectF2
     ): Bar? {
+        // The moving indicator is white on a dark dialog. We therefore do
+        // NOT require the entire bar to be white. Find a horizontal band
+        // containing enough white pixels to represent the fishing track.
         var best: Bar? = null
         var bestScore = 0
 
-        val minWidth = maxOf((box.width * 0.25f).toInt(), 80)
+        val minWidth = maxOf((box.width * 0.18f).toInt(), 40)
 
-        // The fishing bar is horizontal. Search for long bright runs inside
-        // the black dialog only.
-        for (y in box.top until box.bottom step 3) {
-            var start = -1
-            for (x in box.left until box.right step 3) {
-                val bright = isWhite(data, x, y, px, row)
-                if (bright && start < 0) {
-                    start = x
-                } else if (!bright && start >= 0) {
-                    val width = x - start
-                    if (width >= minWidth) {
-                        val score = width
-                        if (score > bestScore) {
-                            bestScore = score
-                            best = Bar(
-                                left = start,
-                                right = x,
-                                top = maxOf(box.top, y - 4),
-                                bottom = minOf(box.bottom, y + 4)
-                            )
-                        }
-                    }
-                    start = -1
+        for (y in box.top until box.bottom step 2) {
+            var first = -1
+            var last = -1
+            var count = 0
+
+            for (x in box.left until box.right step 2) {
+                val o = y * row + x * px
+                if (o + 2 >= data.size) continue
+
+                val r = data[o].toInt() and 255
+                val g = data[o + 1].toInt() and 255
+                val b = data[o + 2].toInt() and 255
+                val hi = maxOf(r, g, b)
+                val lo = minOf(r, g, b)
+
+                if (hi >= 205 && hi - lo <= 50) {
+                    if (first < 0) first = x
+                    last = x
+                    count++
+                }
+            }
+
+            if (first >= 0 && last - first >= minWidth && count >= 8) {
+                val score = count + (last - first) / 2
+                if (score > bestScore) {
+                    bestScore = score
+                    best = Bar(
+                        left = first,
+                        right = last,
+                        top = maxOf(box.top, y - 6),
+                        bottom = minOf(box.bottom, y + 6)
+                    )
                 }
             }
         }
