@@ -312,85 +312,118 @@ class CaptureService : Service() {
         px: Int,
         row: Int
     ): RectF2? {
-        // Do NOT try to identify the dialog by its black background. That
-        // was the main false assumption in the previous detector: the game
-        // can render the dialog with different black levels, shadows and
-        // scaling. The green target is the reliable visual anchor.
-        //
-        // We scan the useful part of the screen for green pixels and build a
-        // generous ROI around the strongest green cluster. This also means
-        // "PUSH O PEIXE / ABORT" cannot trigger anything by itself.
-        var bestX = -1
-        var bestY = -1
-        var bestCount = 0
+        // Detect the dark fishing dialog FIRST. Green pixels anywhere else
+        // on the game screen are deliberately ignored.
+        val cellW = maxOf(8, w / 90)
+        val cellH = maxOf(8, h / 100)
+        val cols = (w + cellW - 1) / cellW
+        val rows = (h + cellH - 1) / cellH
+        val darkCells = BooleanArray(cols * rows)
 
-        val x0 = (w * 0.05f).toInt()
-        val x1 = (w * 0.95f).toInt()
-        val y0 = (h * 0.12f).toInt()
-        val y1 = (h * 0.88f).toInt()
-
-        // Count green pixels in coarse cells. A target is a compact green
-        // object, unlike text/other UI which tends to be spread out.
-        val cellW = maxOf(24, w / 40)
-        val cellH = maxOf(16, h / 50)
-
-        var y = y0
-        while (y < y1) {
-            var x = x0
-            while (x < x1) {
-                var count = 0
-                var sx = 0
-                var sy = 0
-
-                val yy1 = minOf(y + cellH, y1)
-                val xx1 = minOf(x + cellW, x1)
-
-                var yy = y
-                while (yy < yy1) {
-                    var xx = x
-                    while (xx < xx1) {
-                        val o = yy * row + xx * px
+        // Mark grid cells whose sampled pixels are predominantly dark.
+        for (gy in 0 until rows) {
+            for (gx in 0 until cols) {
+                val left = gx * cellW
+                val top = gy * cellH
+                val right = minOf(w, left + cellW)
+                val bottom = minOf(h, top + cellH)
+                var samples = 0
+                var dark = 0
+                var y = top
+                while (y < bottom) {
+                    var x = left
+                    while (x < right) {
+                        val o = y * row + x * px
                         if (o + 2 < data.size) {
                             val r = data[o].toInt() and 255
                             val g = data[o + 1].toInt() and 255
                             val b = data[o + 2].toInt() and 255
-
-                            if (g >= 95 &&
-                                g > r * 1.22f &&
-                                g > b * 1.10f &&
-                                g - r >= 25
-                            ) {
-                                count++
-                                sx += xx
-                                sy += yy
-                            }
+                            val high = maxOf(r, g, b)
+                            val low = minOf(r, g, b)
+                            // Include near-black and translucent charcoal.
+                            if (high <= 105 && high - low <= 45) dark++
+                            samples++
                         }
-                        xx += 2
+                        x += 2
                     }
-                    yy += 2
+                    y += 2
                 }
-
-                if (count > bestCount) {
-                    bestCount = count
-                    bestX = sx / count
-                    bestY = sy / count
+                if (samples >= 4 && dark.toFloat() / samples >= 0.64f) {
+                    darkCells[gy * cols + gx] = true
                 }
-                x += cellW
             }
-            y += cellH
         }
 
-        if (bestCount < 3 || bestX < 0 || bestY < 0) return null
+        // Group adjacent dark cells into candidate dialog panels.
+        val visited = BooleanArray(darkCells.size)
+        var best: RectF2? = null
+        var bestScore = 0.0
+        for (index in darkCells.indices) {
+            if (!darkCells[index] || visited[index]) continue
+            val queue = ArrayDeque<Int>()
+            queue.add(index)
+            visited[index] = true
+            var minGX = cols
+            var maxGX = -1
+            var minGY = rows
+            var maxGY = -1
+            var componentCells = 0
 
-        // The track is horizontally laid out around the green target. Give
-        // the detector plenty of room so the moving white element is never
-        // clipped just because the green point moved to one side.
-        return RectF2(
-            left = (bestX - w * 0.45f).toInt().coerceAtLeast(0),
-            top = (bestY - h * 0.08f).toInt().coerceAtLeast(0),
-            right = (bestX + w * 0.45f).toInt().coerceAtMost(w - 1),
-            bottom = (bestY + h * 0.08f).toInt().coerceAtMost(h - 1)
-        )
+            while (queue.isNotEmpty()) {
+                val current = queue.removeFirst()
+                val gx = current % cols
+                val gy = current / cols
+                componentCells++
+                minGX = minOf(minGX, gx)
+                maxGX = maxOf(maxGX, gx)
+                minGY = minOf(minGY, gy)
+                maxGY = maxOf(maxGY, gy)
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+                        if (dx == 0 && dy == 0) continue
+                        val nx = gx + dx
+                        val ny = gy + dy
+                        if (nx !in 0 until cols || ny !in 0 until rows) continue
+                        val ni = ny * cols + nx
+                        if (darkCells[ni] && !visited[ni]) {
+                            visited[ni] = true
+                            queue.add(ni)
+                        }
+                    }
+                }
+            }
+
+            val left = minGX * cellW
+            val top = minGY * cellH
+            val right = minOf(w - 1, (maxGX + 1) * cellW)
+            val bottom = minOf(h - 1, (maxGY + 1) * cellH)
+            val boxW = right - left
+            val boxH = bottom - top
+            if (boxW <= 0 || boxH <= 0) continue
+            val aspect = boxW.toFloat() / boxH
+            val widthRatio = boxW.toFloat() / w
+            val heightRatio = boxH.toFloat() / h
+            val fill = componentCells.toFloat() /
+                ((maxGX - minGX + 1) * (maxGY - minGY + 1))
+
+            // A fishing panel is wide and shallow. Reject small dark objects,
+            // dark scenery and full-screen dark regions.
+            if (widthRatio < 0.20f || widthRatio > 0.94f) continue
+            if (heightRatio < 0.035f || heightRatio > 0.30f) continue
+            if (aspect < 1.8f || aspect > 14f || fill < 0.34f) continue
+
+            val score = componentCells * fill * (1.0 + widthRatio)
+            if (score > bestScore) {
+                bestScore = score
+                best = RectF2(
+                    left = (left - cellW).coerceAtLeast(0),
+                    top = (top - cellH).coerceAtLeast(0),
+                    right = (right + cellW).coerceAtMost(w - 1),
+                    bottom = (bottom + cellH).coerceAtMost(h - 1)
+                )
+            }
+        }
+        return best
     }
 
     private fun findWhiteProgressBar(
