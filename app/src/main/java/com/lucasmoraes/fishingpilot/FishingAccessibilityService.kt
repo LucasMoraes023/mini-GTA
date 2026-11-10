@@ -121,7 +121,7 @@ class FishingAccessibilityService : AccessibilityService() {
         lateinit var marker: TextView
         marker = TextView(this).apply {
             text = "+"
-            textSize = 38f
+            textSize = 22f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             background = GradientDrawable().apply {
@@ -149,9 +149,9 @@ class FishingAccessibilityService : AccessibilityService() {
             }
         }
 
-        val mp = overlayParams(dp(64), dp(64), Gravity.TOP or Gravity.START)
-        mp.x = resources.displayMetrics.widthPixels / 2 - dp(32)
-        mp.y = resources.displayMetrics.heightPixels / 2 - dp(32)
+        val mp = overlayParams(dp(36), dp(36), Gravity.TOP or Gravity.START)
+        mp.x = resources.displayMetrics.widthPixels / 2 - dp(18)
+        mp.y = resources.displayMetrics.heightPixels / 2 - dp(18)
         wm.addView(marker, mp)
         calibrationMarker = marker
 
@@ -185,8 +185,8 @@ class FishingAccessibilityService : AccessibilityService() {
     private fun saveCalibration() {
         val marker = calibrationMarker ?: return
         val lp = marker.layoutParams as WindowManager.LayoutParams
-        val x = lp.x + dp(32)
-        val y = lp.y + dp(32)
+        val x = lp.x + dp(18)
+        val y = lp.y + dp(18)
 
         getSharedPreferences("pilot", MODE_PRIVATE)
             .edit()
