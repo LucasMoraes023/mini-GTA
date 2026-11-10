@@ -33,6 +33,7 @@ class CaptureServiceFixed : Service() {
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
     private var lastStatus = 0L
+    private var lastCaptureDiagnostic = 0L
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundServiceNotification()
@@ -84,17 +85,72 @@ class CaptureServiceFixed : Service() {
             val bytes = ByteArray(buffer.remaining())
             buffer.get(bytes)
             val now = SystemClock.elapsedRealtime()
+
+            if (now - lastCaptureDiagnostic >= 750L) {
+                lastCaptureDiagnostic = now
+                FishingAccessibilityService.updateStatus(
+                    diagnoseCapture(bytes, image.width, image.height, plane.pixelStride, plane.rowStride)
+                )
+            }
+
             val result = detector.process(
                 bytes, image.width, image.height, plane.pixelStride, plane.rowStride, now
             )
             if (result.fire) FishingAccessibilityService.updateStatus(result.message)
-            else if (now - lastStatus >= 250) {
+            else if (now - lastStatus >= 1200L) {
                 lastStatus = now
                 FishingAccessibilityService.updateStatus(result.message)
             }
             if (result.fire) triggerAlt()
         } finally {
             image.close()
+        }
+    }
+
+    private fun diagnoseCapture(
+        data: ByteArray, w: Int, h: Int, px: Int, row: Int
+    ): String {
+        var samples = 0
+        var nonBlack = 0
+        var varied = 0
+        var sum = 0L
+        var maxLuma = 0
+        val stepX = maxOf(8, w / 80)
+        val stepY = maxOf(8, h / 80)
+
+        var y = 0
+        while (y < h) {
+            var x = 0
+            while (x < w) {
+                val o = y * row + x * px
+                if (o + 2 < data.size) {
+                    val r = data[o].toInt() and 255
+                    val g = data[o + 1].toInt() and 255
+                    val b = data[o + 2].toInt() and 255
+                    val luma = (r * 30 + g * 59 + b * 11) / 100
+                    samples++
+                    sum += luma
+                    maxLuma = maxOf(maxLuma, luma)
+                    if (luma > 12) nonBlack++
+                    if (maxOf(r, g, b) - minOf(r, g, b) > 12) varied++
+                }
+                x += stepX
+            }
+            y += stepY
+        }
+
+        if (samples == 0) return "CAPTURA SEM DADOS"
+        val avg = sum / samples
+        val useful = nonBlack * 100 / samples
+        val colorVar = varied * 100 / samples
+
+        return when {
+            useful < 3 && maxLuma < 25 ->
+                "CAPTURA BLOQUEADA/VAZIA • " + w + "x" + h + " • pixels quase pretos"
+            useful < 12 && maxLuma < 55 ->
+                "CAPTURA MUITO ESCURA • " + w + "x" + h + " • verifique Horizonte"
+            else ->
+                "CAPTURA RECEBIDA • " + w + "x" + h + " • brilho=" + avg + " • úteis=" + useful + "% • cor=" + colorVar + "%"
         }
     }
 
