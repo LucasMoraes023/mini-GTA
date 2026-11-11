@@ -19,6 +19,12 @@ class MainActivity : Activity() {
         buildUi()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Revalida a permissão ao voltar das Configurações do Android.
+        FishingAccessibilityService.instance?.ensureOverlay()
+    }
+
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
