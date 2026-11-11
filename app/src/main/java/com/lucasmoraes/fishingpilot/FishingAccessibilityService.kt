@@ -75,7 +75,7 @@ class FishingAccessibilityService : AccessibilityService() {
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.rgb(28, 150, 92))
+                setColor(Color.rgb(25, 118, 210))
                 setStroke(2, Color.WHITE)
             }
             setOnClickListener { toggleMenu() }
@@ -104,7 +104,7 @@ class FishingAccessibilityService : AccessibilityService() {
             background = GradientDrawable().apply {
                 cornerRadius = dp(10).toFloat()
                 setColor(Color.argb(220, 8, 12, 15))
-                setStroke(dp(1), Color.rgb(45, 210, 125))
+                setStroke(dp(1), Color.rgb(30, 136, 229))
             }
         }
         val p = overlayParams(dp(330), dp(52), Gravity.TOP or Gravity.CENTER_HORIZONTAL)
@@ -125,7 +125,7 @@ class FishingAccessibilityService : AccessibilityService() {
             background = GradientDrawable().apply {
                 cornerRadius = dp(14).toFloat()
                 setColor(Color.argb(235, 15, 20, 24))
-                setStroke(dp(1), Color.rgb(70, 85, 92))
+                setStroke(dp(1), Color.rgb(30, 136, 229))
             }
         }
 
@@ -168,7 +168,7 @@ class FishingAccessibilityService : AccessibilityService() {
             setTextColor(Color.WHITE)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.argb(100, 220, 40, 40))
+                setColor(Color.argb(110, 30, 136, 229))
                 setStroke(dp(3), Color.WHITE)
             }
             setOnTouchListener { _, e ->
@@ -206,7 +206,7 @@ class FishingAccessibilityService : AccessibilityService() {
             }
         }
         panel.addView(TextView(this).apply {
-            text = "CALIBRAR ALT\nArraste o alvo vermelho até o centro do botão ALT."
+            text = "CALIBRAR ALT\nArraste o alvo azul até o centro do botão ALT."
             textSize = 13f
             setTextColor(Color.WHITE)
             setPadding(0, 0, 0, dp(8))
