@@ -44,11 +44,16 @@ class FishingAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        if (Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this)) {
-            showFloatingButton()
-        } else {
-            mainHandler.post { showToast("Autorize sobrepor a outros apps para mostrar o botão FP") }
+        ensureOverlay()
+    }
+
+    /** Revalida a permissão quando o usuário retorna das Configurações. */
+    fun ensureOverlay() {
+        if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) {
+            mainHandler.post { showToast("Libere 'Sobrepor a outros apps' para exibir o botão FP") }
+            return
         }
+        if (floatingButton == null) showFloatingButton()
     }
 
     private fun overlayParams(width: Int, height: Int, gravity: Int): WindowManager.LayoutParams {
@@ -62,6 +67,7 @@ class FishingAccessibilityService : AccessibilityService() {
 
     private fun showFloatingButton() {
         if (floatingButton != null) return
+        if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) return
         val b = TextView(this).apply {
             text = "FP"
             textSize = 13f
@@ -102,7 +108,7 @@ class FishingAccessibilityService : AccessibilityService() {
             }
         }
         val p = overlayParams(dp(330), dp(52), Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-        p.y = dp(105)
+        p.y = dp(32)
         wm.addView(t, p)
         statusPanel = t
     }
@@ -247,12 +253,20 @@ class FishingAccessibilityService : AccessibilityService() {
 
     private fun dispatchTap(x: Float, y: Float): Boolean {
         val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 45)
-        return dispatchGesture(
-            GestureDescription.Builder().addStroke(stroke).build(),
-            null,
-            null
-        )
+        val stroke = GestureDescription.StrokeDescription(path, 0, 65)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                updateStatus("TOQUE ALT EXECUTADO • ${x.roundToInt()}, ${y.roundToInt()}")
+            }
+
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                updateStatus("TOQUE ALT CANCELADO PELO ANDROID")
+            }
+        }, mainHandler)
+        if (!accepted) updateStatus("FALHA AO ENVIAR TOQUE ALT • verifique Acessibilidade")
+        else updateStatus("ENVIANDO TOQUE ALT...")
+        return accepted
     }
 
     private fun removeMenu() {
