@@ -225,47 +225,76 @@ class FishingAccessibilityService : AccessibilityService() {
     }
 
     private fun saveCalibration() {
-        val marker = calibrationMarker ?: return
+        val marker = calibrationMarker ?: run {
+            showStatus("CALIBRAÇÃO • marcador não encontrado")
+            showToast("Marcador de calibração não encontrado")
+            return
+        }
         val lp = marker.layoutParams as WindowManager.LayoutParams
-        val x = lp.x + dp(18)
-        val y = lp.y + dp(18)
-
-        getSharedPreferences("pilot", MODE_PRIVATE)
-            .edit()
-            .putFloat("alt_x", x.toFloat())
-            .putFloat("alt_y", y.toFloat())
+        val x = (lp.x + dp(18)).toFloat()
+        val y = (lp.y + dp(18)).toFloat()
+        getSharedPreferences("pilot", MODE_PRIVATE).edit()
+            .putFloat("alt_x", x)
+            .putFloat("alt_y", y)
             .apply()
-
+        val check = getSharedPreferences("pilot", MODE_PRIVATE)
+        val savedX = check.getFloat("alt_x", -1f)
+        val savedY = check.getFloat("alt_y", -1f)
         removeCalibration()
-        showToast("ALT calibrado: $x, $y")
+        if (savedX >= 0f && savedY >= 0f) {
+            val msg = "ALT CALIBRADO • X=" + savedX.roundToInt() + " Y=" + savedY.roundToInt()
+            showStatus(msg)
+            showToast(msg)
+        } else {
+            showStatus("ERRO AO SALVAR CALIBRAÇÃO")
+            showToast("Não foi possível salvar a posição do ALT")
+        }
     }
 
     fun testAlt() {
+        if (instance !== this) {
+            showStatus("ACESSIBILIDADE • serviço não está ativo")
+            showToast("Fishing Pilot não está ativo em Acessibilidade")
+            return
+        }
         val prefs = getSharedPreferences("pilot", MODE_PRIVATE)
         val x = prefs.getFloat("alt_x", -1f)
         val y = prefs.getFloat("alt_y", -1f)
-        if (x < 0 || y < 0) {
-            startCalibration()
+        if (x < 0f || y < 0f) {
+            showStatus("ALT NÃO CALIBRADO • faça a calibração primeiro")
+            showToast("Calibre o botão ALT primeiro")
             return
         }
+        showStatus("TESTE ALT • enviando toque em " + x.roundToInt() + ", " + y.roundToInt())
         dispatchTap(x, y)
     }
 
     private fun dispatchTap(x: Float, y: Float): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            updateStatus("TOQUE ALT INDISPONÍVEL • Android antigo")
+            return false
+        }
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, 65)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
-        val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                updateStatus("TOQUE ALT EXECUTADO • ${x.roundToInt()}, ${y.roundToInt()}")
-            }
-
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                updateStatus("TOQUE ALT CANCELADO PELO ANDROID")
-            }
-        }, mainHandler)
-        if (!accepted) updateStatus("FALHA AO ENVIAR TOQUE ALT • verifique Acessibilidade")
-        else updateStatus("ENVIANDO TOQUE ALT...")
+        val accepted = try {
+            dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    updateStatus("ALT EXECUTADO ✓ • " + x.roundToInt() + ", " + y.roundToInt())
+                }
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    updateStatus("ALT CANCELADO PELO ANDROID • " + x.roundToInt() + ", " + y.roundToInt())
+                }
+            }, mainHandler)
+        } catch (t: Throwable) {
+            updateStatus("ERRO NO TOQUE ALT • " + t.javaClass.simpleName)
+            false
+        }
+        if (!accepted) {
+            updateStatus("ALT NÃO ENVIADO • Acessibilidade recusou o gesto")
+        } else {
+            updateStatus("ALT ENVIANDO TOQUE • " + x.roundToInt() + ", " + y.roundToInt())
+        }
         return accepted
     }
 
