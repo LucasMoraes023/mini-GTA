@@ -158,10 +158,29 @@ class CaptureServiceFixed : Service() {
         val prefs = getSharedPreferences("pilot", MODE_PRIVATE)
         val x = prefs.getFloat("alt_x", -1f)
         val y = prefs.getFloat("alt_y", -1f)
-        if (x >= 0f && y >= 0f) {
-            FishingAccessibilityService.tap(x, y)
-        } else {
-            FishingAccessibilityService.updateStatus("ALT não calibrado")
+
+        when {
+            x < 0f || y < 0f -> {
+                FishingAccessibilityService.updateStatus(
+                    "ALVO DETECTADO • ALT NÃO CALIBRADO"
+                )
+            }
+            FishingAccessibilityService.instance == null -> {
+                FishingAccessibilityService.updateStatus(
+                    "ALVO DETECTADO • ACESSIBILIDADE DESCONECTADA"
+                )
+            }
+            else -> {
+                FishingAccessibilityService.updateStatus(
+                    "ALVO DETECTADO • solicitando ALT..."
+                )
+                val accepted = FishingAccessibilityService.tap(x, y)
+                if (!accepted) {
+                    FishingAccessibilityService.updateStatus(
+                        "ALT NÃO ENVIADO • verifique Acessibilidade"
+                    )
+                }
+            }
         }
     }
 
