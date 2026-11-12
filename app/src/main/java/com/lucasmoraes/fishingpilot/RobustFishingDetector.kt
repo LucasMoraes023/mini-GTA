@@ -44,10 +44,10 @@ class RobustFishingDetector {
         val cw=max(8,w/90); val ch=max(8,h/100)
         val cols=(w+cw-1)/cw; val rows=(h+ch-1)/ch
         val dark=BooleanArray(cols*rows)
-        for(gy in 0 until rows){ val top=gy*ch; if(top<h*.42f)continue
+        for(gy in 0 until rows){ val top=gy*ch; if(top<h*0.42f)continue
             for(gx in 0 until cols){ val l=gx*cw; val r=min(w,l+cw); val b=min(h,top+ch); var n=0;var yes=0
                 var y=top;while(y<b){var x=l;while(x<r){val o=y*row+x*px;if(o+2<d.size){val rr=d[o].toInt()and 255;val g=d[o+1].toInt()and 255;val bb=d[o+2].toInt()and 255;val hi=max(rr,max(g,bb));val lo=min(rr,min(g,bb));if(hi<=110&&hi-lo<=48)yes++;n++};x+=2};y+=2}
-                if(n>=4&&yes.toFloat()/n>=.58f)dark[gy*cols+gx]=true
+                if(n>=4&&yes.toFloat()/n>=0.58f)dark[gy*cols+gx]=true
             }
         }
         val seen=BooleanArray(dark.size);var best:Rect?=null;var bestScore=0.0
@@ -55,12 +55,12 @@ class RobustFishingDetector {
             val q=ArrayDeque<Int>();q.add(start);seen[start]=true
             var minX=cols;var maxX=-1;var minY=rows;var maxY=-1;var count=0
             while(q.isNotEmpty()){val i=q.removeFirst();val gx=i%cols;val gy=i/cols;count++;minX=min(minX,gx);maxX=max(maxX,gx);minY=min(minY,gy);maxY=max(maxY,gy)
-                for(dy in -1..1)for(dx in -1..1){if(dx==0&&dy==0)continue;val nx=gx+dx;val ny=gy+dy;if(nx !in 0 until cols||ny !in 0 until rows)continue;val ni=ny*cols+nx;if(dark[ni]&&!seen[ni]){seen[ni]=true;q.add(ni)}}
+                for(dy in -1.0.1)for(dx in -1.0.1){if(dx==0&&dy==0)continue;val nx=gx+dx;val ny=gy+dy;if(nx !in 0 until cols||ny !in 0 until rows)continue;val ni=ny*cols+nx;if(dark[ni]&&!seen[ni]){seen[ni]=true;q.add(ni)}}
             }
             val l=minX*cw;val t=minY*ch;val r=min(w-1,(maxX+1)*cw);val b=min(h-1,(maxY+1)*ch);val bw=r-l;val bh=b-t
             if(bw<=0||bh<=0)continue
             val wr=bw.toFloat()/w;val hr=bh.toFloat()/h;val ar=bw.toFloat()/bh;val fill=count.toFloat()/((maxX-minX+1)*(maxY-minY+1))
-            if(wr !in .18f.. .95f||hr !in .025f.. .32f||ar !in 1.8f..15f||fill<.30f)continue
+            if(wr !in 0.18f.. 0.95f||hr !in 0.025f.. 0.32f||ar !in 1.8f.0.15f||fill<0.30f)continue
             val score=count*fill*(1.0+wr);if(score>bestScore){bestScore=score;best=Rect(max(0,l-cw),max(0,t-ch),min(w-1,r+cw),min(h-1,b+ch))}
         }
         return best
@@ -72,7 +72,7 @@ class RobustFishingDetector {
             val rr=d[o].toInt()and 255;val g=d[o+1].toInt()and 255;val bb=d[o+2].toInt()and 255
             if(g>=90&&g-rr>=28&&g-bb>=25&&g>rr*1.18f){n++;l=min(l,x);r=max(r,x);t=min(t,y);b=max(b,y)}
         }
-        if(n<3||r<l||(r-l)>(p.r-p.l)*.20f||(b-t)>(p.b-p.t)*.75f)return null
+        if(n<3||r<l||(r-l)>(p.r-p.l)*0.20f||(b-t)>(p.b-p.t)*0.75f)return null
         return Target(l,r,t,b)
     }
 
