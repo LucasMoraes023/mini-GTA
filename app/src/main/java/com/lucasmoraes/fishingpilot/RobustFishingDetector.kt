@@ -48,18 +48,29 @@ class RobustFishingDetector {
 
     private fun newRound(){ fired=false; lastEdge=Int.MIN_VALUE; lastT=0; speed=0f; moving=0 }
 
+    /**
+     * A barra do minigame fica na caixa preta, na faixa inferior e central da tela.
+     * Não procurar verde no HUD inteiro: há verdes no cabelo, no SAFE e em textos.
+     * Coordenadas relativas permitem trabalhar em resoluções e proporções diferentes.
+     */
     private fun findBar(d:ByteArray,w:Int,h:Int,px:Int,row:Int):Bar?{
-        val ys0=0; val ys1=h-1; val minGreen=max(8,w/200)
-        for(y in ys0..ys1 step max(1,h/800)){
-            var x=0
-            while(x<w){
+        val yStart = (h * 0.76f).toInt().coerceIn(0, h - 1)
+        val yEnd = (h * 0.91f).toInt().coerceIn(yStart, h - 1)
+        val xStart = (w * 0.28f).toInt().coerceIn(0, w - 1)
+        val xEnd = (w * 0.72f).toInt().coerceIn(xStart, w - 1)
+        val minGreen = max(8, w / 200)
+        for(y in yStart..yEnd step max(1,h/800)){
+            var x=xStart
+            while(x<=xEnd){
                 if(!green(d,w,h,px,row,x,y)){x+=2;continue}
-                val gl=x; while(x<w && green(d,w,h,px,row,x,y)) x+=2; val gr=min(w-1,x-1)
+                val gl=x
+                while(x<=xEnd && green(d,w,h,px,row,x,y)) x+=2
+                val gr=min(xEnd,x-1)
                 if(gr-gl+1<minGreen) continue
                 var left=gl-1; var gap=0
-                while(left>=0){ if(barPixel(d,w,h,px,row,left,y)){gap=0}else{gap++;if(gap>3)break};left-- }
+                while(left>=xStart){ if(barPixel(d,w,h,px,row,left,y)){gap=0}else{gap++;if(gap>3)break};left-- }
                 var right=gr+1; gap=0
-                while(right<w){ if(barPixel(d,w,h,px,row,right,y)){gap=0}else{gap++;if(gap>3)break};right++ }
+                while(right<=xEnd){ if(barPixel(d,w,h,px,row,right,y)){gap=0}else{gap++;if(gap>3)break};right++ }
                 val l=left+1; val r=right-1
                 if(r-l+1<max(100,(w*.18f).toInt())) continue
                 val half=max(12,h/24)
