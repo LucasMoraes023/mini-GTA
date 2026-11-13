@@ -21,6 +21,7 @@ import kotlin.math.roundToInt
 class FishingAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile var instance: FishingAccessibilityService? = null
+        @Volatile var lastForegroundPackage: String? = null
 
         fun tap(x: Float, y: Float): Boolean {
             return instance?.dispatchTap(x, y) == true
@@ -63,7 +64,7 @@ class FishingAccessibilityService : AccessibilityService() {
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.rgb(28, 150, 92))
+                setColor(Color.rgb(25, 105, 220))
                 setStroke(2, Color.WHITE)
             }
             setOnClickListener { toggleMenu() }
@@ -92,7 +93,7 @@ class FishingAccessibilityService : AccessibilityService() {
             background = GradientDrawable().apply {
                 cornerRadius = dp(10).toFloat()
                 setColor(Color.argb(220, 8, 12, 15))
-                setStroke(dp(1), Color.rgb(45, 210, 125))
+                setStroke(dp(1), Color.rgb(55, 135, 245))
             }
         }
         val p = overlayParams(dp(330), dp(52), Gravity.TOP or Gravity.CENTER_HORIZONTAL)
@@ -244,8 +245,16 @@ class FishingAccessibilityService : AccessibilityService() {
         val stroke = GestureDescription.StrokeDescription(path, 0, 45)
         return dispatchGesture(
             GestureDescription.Builder().addStroke(stroke).build(),
-            null,
-            null
+            object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    updateStatus("GESTO NO BOTÃO ALT CONCLUÍDO PELO ANDROID")
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    updateStatus("FALHA: GESTO DO BOTÃO ALT CANCELADO")
+                }
+            },
+            mainHandler
         )
     }
 
@@ -273,7 +282,16 @@ class FishingAccessibilityService : AccessibilityService() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Keep the latest foreground package available for diagnostics.
+        // Do not hard-code a Horizonte RP package: the actual package name
+        // must be confirmed on the user's device before foreground gating.
+        event?.packageName?.toString()?.let { packageName ->
+            if (packageName.isNotBlank()) {
+                lastForegroundPackage = packageName
+            }
+        }
+    }
 
     override fun onInterrupt() {}
 
@@ -289,6 +307,7 @@ class FishingAccessibilityService : AccessibilityService() {
         }
         statusPanel = null
         instance = null
+        lastForegroundPackage = null
         super.onDestroy()
     }
 }
