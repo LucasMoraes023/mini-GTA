@@ -114,8 +114,14 @@ class CaptureService : Service() {
                     return@setOnImageAvailableListener
                 }
                 processing = true
-                process(r.acquireLatestImage())
-                processing = false
+                try {
+                    process(r.acquireLatestImage())
+                } catch (t: Throwable) {
+                    FishingAccessibilityService.updateStatus("ERRO NO PROCESSAMENTO DA CAPTURA")
+                    android.util.Log.e("FishingPilot", "Frame processing failed", t)
+                } finally {
+                    processing = false
+                }
             },
             Handler(Looper.getMainLooper())
         )
@@ -163,9 +169,20 @@ class CaptureService : Service() {
                 boxFrames++
             }
 
-            // The black dialog itself is NOT enough to click ALT.
-            // We wait until a real white horizontal bar and its green target
-            // are both detected inside the same dialog.
+            // A single dark region is never enough. Require persistence across
+            // consecutive fresh frames before inspecting the panel contents.
+            if (boxFrames < 3) {
+                if (framesReceived % 5L == 0L) {
+                    FishingAccessibilityService.updateStatus("VALIDANDO PAINEL • ${boxFrames}/3")
+                }
+                previousFrame = data.copyOf()
+                previousFrameWidth = w
+                previousFrameHeight = h
+                return
+            }
+
+            // The panel alone is not a detection. The actual white track and
+            // a compact green target must both be found inside the same ROI.
             val bar = findWhiteProgressBar(data, w, h, px, row, box)
 
             if (bar == null) {
@@ -195,6 +212,8 @@ class CaptureService : Service() {
                 previousFrameWidth = w
                 previousFrameHeight = h
                 activeFrames = 0
+                missingFrames++
+                if (missingFrames >= 6) resetRound()
                 return
             }
 
@@ -400,6 +419,9 @@ class CaptureService : Service() {
             val boxW = right - left
             val boxH = bottom - top
             if (boxW <= 0 || boxH <= 0) continue
+            // The fishing prompt is positioned in the lower gameplay area.
+            // Reject generic dark cards, sidebars and full-screen overlays.
+            if (top < h * 0.35f) continue
             val aspect = boxW.toFloat() / boxH
             val widthRatio = boxW.toFloat() / w
             val heightRatio = boxH.toFloat() / h
@@ -408,9 +430,9 @@ class CaptureService : Service() {
 
             // A fishing panel is wide and shallow. Reject small dark objects,
             // dark scenery and full-screen dark regions.
-            if (widthRatio < 0.20f || widthRatio > 0.94f) continue
-            if (heightRatio < 0.035f || heightRatio > 0.30f) continue
-            if (aspect < 1.8f || aspect > 14f || fill < 0.34f) continue
+            if (widthRatio < 0.24f || widthRatio > 0.88f) continue
+            if (heightRatio < 0.045f || heightRatio > 0.22f) continue
+            if (aspect < 2.6f || aspect > 11f || fill < 0.52f) continue
 
             val score = componentCells * fill * (1.0 + widthRatio)
             if (score > bestScore) {
@@ -423,55 +445,9 @@ class CaptureService : Service() {
                 )
             }
         }
-        if (best != null) return best
-
-        // Fallback: some game versions render the fishing panel translucent
-        // or with a textured background, so a dark connected component may
-        // not exist. The green target is a much more reliable anchor.
-        // Find its vertical position on the captured screen and create a
-        // broad horizontal ROI around it. The next stages still require a
-        // compact green target and a moving white marker before ALT can fire.
-        var greenCount = 0
-        var greenMinX = w
-        var greenMaxX = -1
-        var greenMinY = h
-        var greenMaxY = -1
-
-        var y = 0
-        while (y < h) {
-            var x = 0
-            while (x < w) {
-                val o = y * row + x * px
-                if (o + 2 < data.size) {
-                    val r = data[o].toInt() and 255
-                    val g = data[o + 1].toInt() and 255
-                    val b = data[o + 2].toInt() and 255
-                    if (g >= 110 && g > r * 1.30f && g > b * 1.12f && g - r >= 30) {
-                        greenCount++
-                        greenMinX = minOf(greenMinX, x)
-                        greenMaxX = maxOf(greenMaxX, x)
-                        greenMinY = minOf(greenMinY, y)
-                        greenMaxY = maxOf(greenMaxY, y)
-                    }
-                }
-                x += 3
-            }
-            y += 3
-        }
-
-        // A tiny green speck is likely unrelated UI noise. Require a cluster.
-        if (greenCount < 3 || greenMaxX < greenMinX || greenMaxY < greenMinY) {
-            return null
-        }
-
-        val anchorY = (greenMinY + greenMaxY) / 2
-        val roiHalfHeight = maxOf(24, h / 14)
-        return RectF2(
-            left = (w * 0.03f).toInt(),
-            top = (anchorY - roiHalfHeight).coerceAtLeast(0),
-            right = (w * 0.97f).toInt().coerceAtMost(w - 1),
-            bottom = (anchorY + roiHalfHeight).coerceAtMost(h - 1)
-        )
+        // Never synthesize a panel ROI from green pixels elsewhere on the
+        // screen. If the dark panel signature is absent, there is no detection.
+        return best
     }
 
     private fun findWhiteProgressBar(
@@ -530,17 +506,8 @@ class CaptureService : Service() {
             }
         }
 
-        // If the white track is very thin or the capture sampled it between
-        // rows, keep the green ROI instead of declaring the screen absent.
-        if (best == null) {
-            best = Bar(
-                left = box.left,
-                right = box.right,
-                top = maxOf(box.top, centerY - band),
-                bottom = minOf(box.bottom, centerY + band)
-            )
-        }
-
+        // A missing white track is a failed detection, not permission to
+        // invent a bar around the center of the panel.
         return best
     }
 
@@ -550,47 +517,59 @@ class CaptureService : Service() {
         row: Int,
         bar: Bar
     ): Pair<Float, Float>? {
-        var minX = Int.MAX_VALUE
-        var maxX = Int.MIN_VALUE
-        var minY = Int.MAX_VALUE
-        var maxY = Int.MIN_VALUE
-        var count = 0
+        val width = bar.right - bar.left + 1
+        val height = bar.bottom - bar.top + 1
+        if (width < 24 || height < 4) return null
 
+        // Build a per-column profile. A valid target must occupy several
+        // adjacent columns and multiple rows; isolated green HUD pixels fail.
+        val columnHits = IntArray(width)
+        var totalGreen = 0
         for (y in bar.top..bar.bottom step 2) {
             for (x in bar.left..bar.right step 2) {
                 val o = y * row + x * px
                 if (o + 2 >= data.size) continue
-
                 val r = data[o].toInt() and 255
                 val g = data[o + 1].toInt() and 255
                 val b = data[o + 2].toInt() and 255
-
-                if (g >= 95 &&
-                    g > r * 1.22f &&
-                    g > b * 1.10f &&
-                    g - r >= 25
-                ) {
-                    minX = minOf(minX, x)
-                    maxX = maxOf(maxX, x)
-                    minY = minOf(minY, y)
-                    maxY = maxOf(maxY, y)
-                    count++
+                val green = g >= 105 &&
+                    g - r >= 32 &&
+                    g - b >= 24 &&
+                    g > r * 1.28f &&
+                    g > b * 1.12f
+                if (green) {
+                    columnHits[x - bar.left]++
+                    totalGreen++
                 }
             }
         }
 
-        if (count < 2 || minX == Int.MAX_VALUE) return null
-
-        val width = maxX - minX
-        val height = maxY - minY
-
-        // Reject a huge green region: the target should be compact.
-        if (width > bar.right - bar.left || height > (bar.bottom - bar.top)) {
-            return null
+        val minColumnHits = maxOf(2, height / 12)
+        val active = BooleanArray(width) { columnHits[it] >= minColumnHits }
+        var bestStart = -1
+        var bestEnd = -1
+        var i = 0
+        while (i < width) {
+            if (!active[i]) {
+                i++
+                continue
+            }
+            val runStart = i
+            while (i < width && active[i]) i++
+            val runEnd = i - 1
+            if (bestStart < 0 || runEnd - runStart > bestEnd - bestStart) {
+                bestStart = runStart
+                bestEnd = runEnd
+            }
         }
 
-        val center = (minX + maxX) / 2f
-        val halfWidth = maxOf(width / 2f, 4f)
+        if (bestStart < 0 || totalGreen < 8) return null
+        val targetWidth = bestEnd - bestStart + 1
+        // A target is a compact zone, not a large green background.
+        if (targetWidth < 3 || targetWidth > width * 0.30f) return null
+
+        val center = bar.left + (bestStart + bestEnd) / 2f
+        val halfWidth = maxOf(targetWidth / 2f, 2f)
         return center to halfWidth
     }
 
