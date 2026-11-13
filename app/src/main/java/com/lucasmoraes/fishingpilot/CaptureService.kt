@@ -153,7 +153,7 @@ class CaptureService : Service() {
 
             if (box == null) {
                 if (framesReceived % 10L == 0L) {
-                    FishingAccessibilityService.updateStatus("CAPTURA OK • frames=$framesReceived • procurando alvo verde")
+                    FishingAccessibilityService.updateStatus("AGUARDANDO MINIGAME")
                 }
                 resetRoundAfterMissing()
                 previousFrame = data.copyOf()
@@ -187,7 +187,7 @@ class CaptureService : Service() {
 
             if (bar == null) {
                 if (framesReceived % 10L == 0L) {
-                    FishingAccessibilityService.updateStatus("CAPTURA OK • caixa detectada • procurando barra")
+                    FishingAccessibilityService.updateStatus("PAINEL CANDIDATO • procurando trilho branco")
                 }
                 previousFrame = data.copyOf()
                 previousFrameWidth = w
@@ -206,7 +206,7 @@ class CaptureService : Service() {
 
             if (target == null) {
                 if (framesReceived % 10L == 0L) {
-                    FishingAccessibilityService.updateStatus("CAPTURA OK • barra detectada • procurando alvo verde")
+                    FishingAccessibilityService.updateStatus("TRILHO BRANCO DETECTADO • validando faixa verde")
                 }
                 previousFrame = data.copyOf()
                 previousFrameWidth = w
@@ -246,7 +246,7 @@ class CaptureService : Service() {
 
             if (whiteCenter == null || activeFrames < 3) {
                 if (framesReceived % 10L == 0L) {
-                    FishingAccessibilityService.updateStatus("CAPTURA OK • ALVO VERDE DETECTADO • seguindo marcador branco")
+                    FishingAccessibilityService.updateStatus("FAIXA VERDE VALIDADA • aguardando marcador móvel")
                 }
                 previousFrame = data.copyOf()
                 previousFrameWidth = w
@@ -306,10 +306,14 @@ class CaptureService : Service() {
             ) {
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastTrigger >= 500L) {
-                    triggeredThisRound = true
-                    lastTrigger = now
-                    FishingAccessibilityService.updateStatus("ALT DISPARADO • alvo verde alcançado")
-                    triggerAlt()
+                    val sent = triggerAlt()
+                    if (sent) {
+                        triggeredThisRound = true
+                        lastTrigger = now
+                        FishingAccessibilityService.updateStatus("ACIONAMENTO ENVIADO • aguardando confirmação do Android")
+                    } else {
+                        FishingAccessibilityService.updateStatus("ACIONAMENTO NÃO ENVIADO • verifique acessibilidade e calibração")
+                    }
                 }
             }
 
@@ -739,14 +743,13 @@ class CaptureService : Service() {
         previousFrameHeight = 0
     }
 
-    private fun triggerAlt() {
+    private fun triggerAlt(): Boolean {
         val prefs = getSharedPreferences("pilot", MODE_PRIVATE)
         val x = prefs.getFloat("alt_x", -1f)
         val y = prefs.getFloat("alt_y", -1f)
 
-        if (x >= 0f && y >= 0f) {
-            FishingAccessibilityService.tap(x, y)
-        }
+        if (x < 0f || y < 0f) return false
+        return FishingAccessibilityService.tap(x, y)
     }
 
     private fun createChannel() {
