@@ -1,4 +1,6 @@
 name: Android Build
+permissions:
+  contents: write
 on: [push, workflow_dispatch]
 jobs:
   build:
@@ -15,3 +17,12 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 
 # build trigger: diagnostic overlay
+      - name: Publish direct APK release asset
+        if: github.ref == 'refs/heads/fix/strict-detection-from-report'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="fishingpilot-build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          gh release create "$TAG" app/build/outputs/apk/debug/app-debug.apk \
+            --title "Fishing Pilot APK ${GITHUB_RUN_NUMBER}" \
+            --notes "APK compilado automaticamente a partir do commit ${GITHUB_SHA}. A compilação não substitui o teste no Horizonte RP."
