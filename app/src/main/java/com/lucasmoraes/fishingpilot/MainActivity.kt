@@ -41,7 +41,7 @@ class MainActivity : Activity() {
         status = TextView(this).apply {
             text = "Pronto"
             textSize = 16f
-            setTextColor(0xFF26D07C.toInt())
+            setTextColor(0xFF4D9CFF.toInt())
             setPadding(0, 0, 0, 20)
         }
 
